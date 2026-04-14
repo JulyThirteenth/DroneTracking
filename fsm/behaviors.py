@@ -7,11 +7,6 @@
 """
 
 from __future__ import annotations
-<<<<<<< HEAD
-from dataclasses import dataclass
-from typing import Any
-import numpy as np
-=======
 
 from dataclasses import dataclass
 from typing import Any
@@ -34,7 +29,6 @@ _PX4_CMD_DO_SET_MODE = 176
 _PX4_CMD_COMPONENT_ARM_DISARM = 400
 _PX4_MODE_OFFBOARD = 6.0
 _MIN_PROGRESS_DISTANCE_M = 0.01
->>>>>>> 908d818 (real_drone_dev)
 
 
 @dataclass
