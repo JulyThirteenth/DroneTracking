@@ -1,0 +1,84 @@
+runtime:
+  controller: mpc
+  solver: osqp
+
+fsm:
+  cmd_topic: /fsm/cmd
+  state_topic: /fsm/state
+  path_topic: /tracking/path
+  ref_path_topic: /tracking/ref_traj_path
+  log_dir: ""
+  log_enabled: true
+  log_flush_every: 1
+  takeoff_speed_mps: 0.4
+  auto_land: true
+  auto_land_distance_m: 0.1
+  auto_land_speed_mps: 0.1
+  auto_land_hold_cycles: 20
+
+plan2track:
+  path_topic: /planning/path
+  ref_path_topic: /tracking/ref_traj_path
+  out_path_topic: /tracking/path
+  vehicle_pose_topic: /tracking/vehicle_pose
+  yaw_cmd_topic: /planning/yaw_cmd_enu
+  fixed_yaw: True
+  init_yaw: 0.0
+  path_file: ""
+  origin_mode: fixed
+  frame_id: map
+  loop: false
+
+tracking_ros:
+  offboard_control_mode_topic: /fmu/in/offboard_control_mode
+  vehicle_rates_setpoint_topic: /fmu/in/vehicle_rates_setpoint
+  vehicle_command_topic: /fmu/in/vehicle_command
+  vehicle_local_position_topic: /fmu/out/vehicle_local_position
+  target_system: 1
+  pub_offboard: true
+
+tracking:
+  tasks:
+    dir_name: tasks
+    waypoint_file: comp_waypoint_3.txt
+  mpc:
+    dt: 0.1
+    horizon: 15
+    v_ref: 1.5
+  control:
+    dt: 0.01
+  yaw:
+    kp: 0.04
+    yaw_rate_limit: 1.57
+  ctbr:
+    hover_thrust: 0.25
+    g: 9.81
+    thrust_min: 0.1
+    thrust_max: 0.6
+  accel_fusion:
+    imu_alpha: 0.02
+  constraints:
+    u_min: [-25.0, -25.0, -25.0]
+    u_max: [25.0, 25.0, 25.0]
+    du_min: [-50.0, -50.0, -50.0]
+    du_max: [50.0, 50.0, 50.0]
+    v_min: [-8.0, -8.0, -8.0]
+    v_max: [8.0, 8.0, 8.0]
+    a_min: [-20.0, -20.0, -10.0]
+    a_max: [20.0, 20.0, 20.0]
+    v_slack_weight: 10000.0
+    a_slack_weight: 10000.0
+    terminal_v_weight: 200.0
+    terminal_a_weight: 200.0
+  mpc_cost:
+    Q_diag: [2000.0, 2000.0, 2000.0]
+    R_diag: [0.0, 0.0, 0.0]
+    Rd_diag: [0.2, 0.2, 0.2]
+    terminal: 1.0
+  mpcc_cost:
+    q_contour: 500.0
+    q_lag: 2.0
+    q_progress: 1.0
+    q_terminal_s: 10.0
+    vs_max: 1.0
+    vs_min: 0.0
