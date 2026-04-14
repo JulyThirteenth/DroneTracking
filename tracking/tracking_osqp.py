@@ -11,6 +11,7 @@ from tracking_utils import (
     sample_polyline_with_tangent,
 )
 
+
 def uav_jerk_discrete_matrices(dt: float) -> tuple[np.ndarray, np.ndarray]:
     """
     Discrete triple-integrator for x=[p,v,a], u=jerk (all 3D), held constant on [k,k+1):
@@ -145,15 +146,6 @@ class MPCOSQP:
         xN = idx.x(N)
         P[np.ix_(xN.start + track_idx, xN.start + track_idx)] += (
             2.0 * float(getattr(p, "terminal")) * Q
-        )
-
-        w_v_term = float(getattr(p, "terminal_v_weight", 5.0))
-        w_a_term = float(getattr(p, "terminal_a_weight", 2.0))
-        P[xN.start + 3 : xN.start + 6, xN.start + 3 : xN.start + 6] += (
-            2.0 * w_v_term * np.eye(3)
-        )
-        P[xN.start + 6 : xN.start + 9, xN.start + 6 : xN.start + 9] += (
-            2.0 * w_a_term * np.eye(3)
         )
 
         for k in range(N):
@@ -565,7 +557,9 @@ class MPCCOSQP:
         sv0 = vs0 + N if have_v else None
         sa0 = (sv0 + 3 * (N + 1)) if have_v else (vs0 + N)
         sa0 = sa0 if have_a else None
-        idx = _IdxTracker(nx=nx, nu=nu, N=N, x0=x0, u0=u0, s0=s0, vs0=vs0, sv0=sv0, sa0=sa0)
+        idx = _IdxTracker(
+            nx=nx, nu=nu, N=N, x0=x0, u0=u0, s0=s0, vs0=vs0, sv0=sv0, sa0=sa0
+        )
         nvar = idx.nvar
 
         # --------------------
@@ -975,9 +969,11 @@ class MPCCOSQP:
         if path_pts is None:
             tgt = np.asarray(target, dtype=float).reshape(-1)
             if tgt.shape[0] < 3:
-                raise ValueError("target must contain at least 3 elements (goal position).")
+                raise ValueError(
+                    "target must contain at least 3 elements (goal position)."
+                )
             q, L, s_init = self._update_for_straight_line(x0, tgt)
-            s_upper = np.inf
+            s_upper = float(L)
         else:
             poly = Polyline3D.from_points(path_pts, dedupe=True)
             path_pts = poly.points

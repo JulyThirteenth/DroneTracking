@@ -96,11 +96,7 @@ class PathCache:
 
     @property
     def has_segments(self) -> bool:
-        return (
-            self.point_count >= 2
-            and np.isfinite(self.length)
-            and self.length > 0.0
-        )
+        return self.point_count >= 2 and np.isfinite(self.length) and self.length > 0.0
 
 
 class PathReferenceBuilder:

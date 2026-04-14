@@ -30,7 +30,7 @@ tmux send-keys -t "$SESSION":0.0 \
 
 # 4) 下方三个 pane 执行命令
 tmux send-keys -t "$SESSION":0.1 \
-'isaac_run ~/DroneSimulator/PegasusSimulator/examples/drone_racing/isaacsim/sim_multi.py' C-m
+'isaac_run ~/DroneSimulator/PegasusSimulator/examples/DroneTracking/isaacsim/sim_multi.py' C-m
 
 tmux send-keys -t "$SESSION":0.2 \
 'MicroXRCEAgent udp4 -p 8888' C-m

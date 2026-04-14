@@ -83,9 +83,6 @@ class ConstraintsConfig:
     v_slack_weight: float = 10000.0
     a_slack_weight: float = 10000.0
 
-    terminal_v_weight: float = 200.0
-    terminal_a_weight: float = 200.0
-
 
 @dataclass(frozen=True)
 class MpcCostConfig:
@@ -179,8 +176,6 @@ class MPCParamsCfg:
     R: np.ndarray
     Rd: np.ndarray
     track_idx: np.ndarray
-    terminal_v_weight: float
-    terminal_a_weight: float
     v_max: np.ndarray | None
     v_min: np.ndarray | None
     a_max: np.ndarray | None
@@ -231,8 +226,6 @@ def make_mpc_params(cfg: TrackingConfig, *, with_dynamics: bool) -> MPCParamsCfg
         a_max=_vec3_or_none(c.a_max),
         v_slack_weight=float(c.v_slack_weight),
         a_slack_weight=float(c.a_slack_weight),
-        terminal_v_weight=float(c.terminal_v_weight),
-        terminal_a_weight=float(c.terminal_a_weight),
     )
 
 

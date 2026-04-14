@@ -41,7 +41,7 @@ tracking_ros:
 tracking:
   tasks:
     dir_name: tasks
-    waypoint_file: demo_waypoint_1.txt
+    waypoint_file: comp_waypoint_1.txt
   mpc:
     dt: 0.1
     horizon: 15
@@ -57,7 +57,7 @@ tracking:
     thrust_min: 0.1
     thrust_max: 0.9
   accel_fusion:
-    imu_alpha: 0.005
+    imu_alpha: 0.01
   constraints:
     u_min: [-25.0, -25.0, -25.0]
     u_max: [25.0, 25.0, 25.0]
@@ -69,17 +69,15 @@ tracking:
     a_max: [20.0, 20.0, 20.0]
     v_slack_weight: 20000.0
     a_slack_weight: 20000.0
-    terminal_v_weight: 200.0
-    terminal_a_weight: 200.0
   mpc_cost:
     Q_diag: [2000.0, 2000.0, 2000.0]
     R_diag: [0.0, 0.0, 0.0]
     Rd_diag: [0.2, 0.2, 0.2]
     terminal: 1.0
   mpcc_cost:
-    q_contour: 100.0
+    q_contour: 200.0
     q_lag: 1.0
     q_progress: 1.0
-    q_terminal_s: 0.1
-    vs_max: 5.0
+    q_terminal_s: 0.0
+    vs_max: 3.0
     vs_min: 0.0

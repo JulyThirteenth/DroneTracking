@@ -120,7 +120,9 @@ class FsmTerminalApp(Node):
             return msgs
 
     def allowed_events(self, state: str) -> tuple[str, ...]:
-        events = sorted({event for src, event, _dst in self._transitions if src == state})
+        events = sorted(
+            {event for src, event, _dst in self._transitions if src == state}
+        )
         return tuple(events)
 
     def allowed_commands(self, state: str) -> tuple[str, ...]:
@@ -224,9 +226,7 @@ def main() -> None:
 
     cmd_queue: queue.Queue[str] = queue.Queue()
     stop = threading.Event()
-    thread = threading.Thread(
-        target=_stdin_reader, args=(cmd_queue, stop), daemon=True
-    )
+    thread = threading.Thread(target=_stdin_reader, args=(cmd_queue, stop), daemon=True)
     thread.start()
 
     node.get_logger().info(

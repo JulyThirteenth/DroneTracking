@@ -77,8 +77,6 @@ class OptimizerParams:
     terminal: float
     Rd: np.ndarray
     track_idx: np.ndarray
-    terminal_v_weight: float
-    terminal_a_weight: float
 
 
 class Optimizer:
@@ -168,12 +166,6 @@ class Optimizer:
         cost += self.params.terminal * ca.mtimes(
             [terminal_error.T, self.params.Q, terminal_error]
         )
-        # penalize velocity/acceleration for smooth stop
-        v_term = x[3:6, self.params.horizon]
-        a_term = x[6:9, self.params.horizon]
-        w_v = float(getattr(self.params, "terminal_v_weight", 5.0))
-        w_a = float(getattr(self.params, "terminal_a_weight", 2.0))
-        cost += w_v * ca.sumsqr(v_term) + w_a * ca.sumsqr(a_term)
         self.costs["target_cost"] = cost
 
     def add_input_cost(self):
@@ -433,6 +425,7 @@ class MPCC(MPC):
         s = self.variables["s"]
         vs = self.variables["vs"]
         dt = float(self.params.dt)
+        eps = 1e-6
 
         # progress initialization (can also be warm-started)
         self.opti.subject_to(s[0, 0] == self.parameters["s_init"][0])
@@ -444,9 +437,13 @@ class MPCC(MPC):
         # monotone progress
         self.opti.subject_to(vs >= 0)
 
-        # progress bounds (optional; used for path tracking so s stays on [0, L])
+        # keep progress within the active reference length.
         self.opti.subject_to(s >= 0)
-        if self._path_L is not None:
+        if self._path_interp is None:
+            d = self.parameters["x_target"][0:3] - self.parameters["x_init"][0:3]
+            line_length = ca.sqrt(ca.dot(d, d) + eps)
+            self.opti.subject_to(s <= line_length)
+        elif self._path_L is not None:
             self.opti.subject_to(s <= float(self._path_L))
 
         # optional bounds (if you set params.vs_min / params.vs_max)

@@ -372,3 +372,5 @@ def generate_waypoint(
         gprim.CreateDisplayOpacityAttr().Set([float(opacity)])
         created += 1
     return created
+
+

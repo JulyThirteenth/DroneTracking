@@ -68,8 +68,6 @@ tracking:
     a_max: [20.0, 20.0, 20.0]
     v_slack_weight: 10000.0
     a_slack_weight: 10000.0
-    terminal_v_weight: 200.0
-    terminal_a_weight: 200.0
   mpc_cost:
     Q_diag: [2000.0, 2000.0, 2000.0]
     R_diag: [0.0, 0.0, 0.0]
