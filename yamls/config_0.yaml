@@ -45,11 +45,7 @@ tracking:
   mpc:
     dt: 0.1
     horizon: 15
-<<<<<<< HEAD
     v_ref: 3.0
-=======
-    v_ref: 5.0
->>>>>>> 908d818 (real_drone_dev)
   control:
     dt: 0.01
   yaw:
@@ -61,11 +57,7 @@ tracking:
     thrust_min: 0.1
     thrust_max: 0.9
   accel_fusion:
-<<<<<<< HEAD
-    imu_alpha: 0.01
-=======
     imu_alpha: 0.005
->>>>>>> 908d818 (real_drone_dev)
   constraints:
     u_min: [-25.0, -25.0, -25.0]
     u_max: [25.0, 25.0, 25.0]
@@ -85,16 +77,9 @@ tracking:
     Rd_diag: [0.2, 0.2, 0.2]
     terminal: 1.0
   mpcc_cost:
-<<<<<<< HEAD
-    q_contour: 2000.0
-    q_lag: 1.0
-    q_progress: 1.0
-    q_terminal_s: 10.0
-=======
     q_contour: 100.0
     q_lag: 1.0
     q_progress: 1.0
     q_terminal_s: 0.1
->>>>>>> 908d818 (real_drone_dev)
     vs_max: 5.0
     vs_min: 0.0

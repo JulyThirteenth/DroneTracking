@@ -134,6 +134,7 @@ class PathTrackerCtbr:
         self._a_est = (1.0 - self._imu_alpha) * self._a_est + self._imu_alpha * a_enu
         # self._a_est = a_enu
 
+
         x0 = np.hstack((p, v, self._a_est))
         u0 = self._u_last
         if not self._warm_started:
@@ -176,7 +177,7 @@ class PathTrackerCtbr:
             self._vs_ws = vs_sol
             ref_traj = x_sol[0:3, :]
 
-        a_enu = x_sol[6:9, 0]
+        a_enu = x_sol[6:9, 1]
         jerk_enu = u_sol[:, 0]
 
         if self._yaw_cmd_prev_enu is None:
