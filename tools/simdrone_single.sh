@@ -39,5 +39,5 @@ tmux send-keys -t "$SESSION":0.3 \
 '~/DroneSimulator/QGroundControl-x86_64.AppImage' C-m
 
 # 5) 最后选中 pane0
-tmux select-pane -t "$SESSION":0.0
+tmux select-pane -t "$SESSION":0.1
 tmux attach -t "$SESSION"

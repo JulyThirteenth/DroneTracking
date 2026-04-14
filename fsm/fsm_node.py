@@ -14,7 +14,9 @@ setpoints.
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+
 import numpy as np
 import rclpy
 from nav_msgs.msg import Path as RosPath
@@ -29,34 +31,26 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "tracking"))
 
-from behaviors import DroneBehaviors, VehicleState, path_msg_points_enu 
-from core import Event, FiniteStateMachine, Transition 
-from fsm_spec import ( 
+from behaviors import DroneBehaviors, VehicleState
+from core import Event, FiniteStateMachine, Transition
+from fsm_spec import (
     CMD_TO_EVENT,
-    EVENT_ABORT,
-    EVENT_EXECUTE,
     EVENT_LAND,
-    EVENT_PREPARE,
-    EVENT_RETURN,
-    EVENT_TAKEOFF,
-    STATE_HOVER,
     STATE_HOVER_START,
     STATE_PREFLIGHT,
-    STATE_READY,
-    STATE_RETURN_HOVER,
     STATE_TRACKING,
     TRANSITION_SPECS,
 )
-from fsm_log import FsmCsvLogger  
-from tracking_cfg import DEFAULT_CONFIG 
-from tracking_cnt import PathTrackerCtbr 
-from yamls.config import get_cfg  
+from fsm_log import FsmCsvLogger
+from tracking_cfg import DEFAULT_CONFIG
+from tracking_cnt import PathTrackerCtbr
+from yamls.config import get_cfg
 from tracking_ros import (
     Px4Bridge,
     TOPIC_VEHICLE_LOCAL_POSITION,
     qos_px4_out,
-)  
-from tracking_utils import (  
+)
+from tracking_utils import (
     is_finite_vec3,
     ned_to_enu,
     wrap_pi,
@@ -66,6 +60,38 @@ from tracking_utils import (
 _CFG = get_cfg()
 
 
+@dataclass(frozen=True)
+class AutoLandConfig:
+    enabled: bool
+    distance_m: float
+    speed_mps: float
+    hold_cycles: int
+
+
+def _latched_qos(depth: int) -> QoSProfile:
+    return QoSProfile(
+        reliability=ReliabilityPolicy.RELIABLE,
+        durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        history=HistoryPolicy.KEEP_LAST,
+        depth=int(depth),
+    )
+
+
+def _string_msg(data: str) -> String:
+    msg = String()
+    msg.data = str(data)
+    return msg
+
+
+def _path_msg_points_enu(msg: RosPath) -> np.ndarray:
+    """Extract ENU points from a `nav_msgs/Path` message."""
+    poses = getattr(msg, "poses", None) or []
+    return np.array(
+        [[ps.pose.position.x, ps.pose.position.y, ps.pose.position.z] for ps in poses],
+        dtype=float,
+    )
+
+
 def _derive_info_topic(state_topic: str) -> str:
     topic = str(state_topic).strip()
     if topic.endswith("/state"):
@@ -73,9 +99,46 @@ def _derive_info_topic(state_topic: str) -> str:
     return f"{topic}/info"
 
 
-def build_transitions() -> list[Transition]:
+def _build_transitions() -> list[Transition]:
     """Return the FSM transition table."""
     return [Transition(src, event, dst) for src, event, dst in TRANSITION_SPECS]
+
+
+def _vehicle_state_from_local_position(
+    msg: VehicleLocalPosition,
+) -> VehicleState | None:
+    heading = getattr(msg, "heading", None)
+    yaw_ned = float(heading) if heading is not None else 0.0
+    if not (heading is not None and np.isfinite(yaw_ned)):
+        yaw_ned = 0.0
+    yaw_ned = wrap_pi(yaw_ned)
+
+    pos_ned = (
+        getattr(msg, "x", float("nan")),
+        getattr(msg, "y", float("nan")),
+        getattr(msg, "z", float("nan")),
+    )
+    vel_ned = (
+        getattr(msg, "vx", float("nan")),
+        getattr(msg, "vy", float("nan")),
+        getattr(msg, "vz", float("nan")),
+    )
+    acc_ned = (
+        getattr(msg, "ax", float("nan")),
+        getattr(msg, "ay", float("nan")),
+        getattr(msg, "az", float("nan")),
+    )
+    if not (
+        is_finite_vec3(pos_ned) and is_finite_vec3(vel_ned) and is_finite_vec3(acc_ned)
+    ):
+        return None
+
+    return VehicleState(
+        position_enu=ned_to_enu(pos_ned),
+        velocity_enu=ned_to_enu(vel_ned),
+        accel_enu=ned_to_enu(acc_ned),
+        yaw_enu=yaw_ned_to_enu(yaw_ned),
+    )
 
 
 class DroneFSMNode(Node):
@@ -93,35 +156,27 @@ class DroneFSMNode(Node):
         super().__init__("drone_fsm")
         fsm_cfg = _CFG.fsm
 
-        self.cfg = DEFAULT_CONFIG
-        self._dt = float(self.cfg.control.dt)
-        self._mode = str(controller).lower().strip()
+        self._tracking_cfg = DEFAULT_CONFIG
+        self._dt = float(self._tracking_cfg.control.dt)
+        self._controller = str(controller).lower().strip()
         self._solver = str(solver).lower().strip()
-        self._auto_land_enabled = bool(fsm_cfg.auto_land)
-        self._auto_land_distance_m = float(fsm_cfg.auto_land_distance_m)
-        self._auto_land_speed_mps = float(fsm_cfg.auto_land_speed_mps)
-        self._auto_land_hold_cycles = max(int(fsm_cfg.auto_land_hold_cycles), 1)
+        self._auto_land = AutoLandConfig(
+            enabled=bool(fsm_cfg.auto_land),
+            distance_m=float(fsm_cfg.auto_land_distance_m),
+            speed_mps=float(fsm_cfg.auto_land_speed_mps),
+            hold_cycles=max(int(fsm_cfg.auto_land_hold_cycles), 1),
+        )
         self._auto_land_stable_count = 0
 
         self._pub_state = self.create_publisher(
             String,
             str(fsm_cfg.state_topic),
-            QoSProfile(
-                reliability=ReliabilityPolicy.RELIABLE,
-                durability=DurabilityPolicy.TRANSIENT_LOCAL,
-                history=HistoryPolicy.KEEP_LAST,
-                depth=1,
-            ),
+            _latched_qos(depth=1),
         )
         self._pub_info = self.create_publisher(
             String,
             _derive_info_topic(str(fsm_cfg.state_topic)),
-            QoSProfile(
-                reliability=ReliabilityPolicy.RELIABLE,
-                durability=DurabilityPolicy.TRANSIENT_LOCAL,
-                history=HistoryPolicy.KEEP_LAST,
-                depth=10,
-            ),
+            _latched_qos(depth=10),
         )
         self.create_subscription(String, str(fsm_cfg.cmd_topic), self._on_cmd, 10)
         self.create_subscription(
@@ -134,8 +189,8 @@ class DroneFSMNode(Node):
         self._bridge = Px4Bridge(self)
         self._tracker = PathTrackerCtbr(
             None,
-            cfg=self.cfg,
-            controller=self._mode,
+            cfg=self._tracking_cfg,
+            controller=self._controller,
             solver=self._solver,
         )
         base_dir = (
@@ -149,7 +204,7 @@ class DroneFSMNode(Node):
             enabled=bool(log_enabled),
             flush_every=int(log_flush_every),
             meta={
-                "controller": self._mode,
+                "controller": self._controller,
                 "solver": self._solver,
                 "dt_control_s": float(self._dt),
                 "takeoff_speed_mps": float(fsm_cfg.takeoff_speed_mps),
@@ -167,13 +222,17 @@ class DroneFSMNode(Node):
             init_yaw_enu=float(_CFG.plan2track.init_yaw),
         )
 
-        if self._mode == "mpc":
+        # Subscribe to path topics based on controller type.
+        # MPC uses a reference path for tracking, while other controllers use a direct path input.
+        if self._controller == "mpc":
             self.create_subscription(
                 RosPath, str(fsm_cfg.ref_path_topic), self._on_ref_path, 10
             )
             self.get_logger().info(f"Subscribed ref_path: {fsm_cfg.ref_path_topic}")
         else:
-            self.create_subscription(RosPath, str(fsm_cfg.path_topic), self._on_path, 10)
+            self.create_subscription(
+                RosPath, str(fsm_cfg.path_topic), self._on_path, 10
+            )
             self.get_logger().info(f"Subscribed path: {fsm_cfg.path_topic}")
         self.get_logger().info(f"Subscribed yaw_cmd: {_CFG.plan2track.yaw_cmd_topic}")
 
@@ -186,14 +245,14 @@ class DroneFSMNode(Node):
 
         self._fsm = FiniteStateMachine(
             initial=STATE_PREFLIGHT,
-            transitions=build_transitions(),
+            transitions=_build_transitions(),
             on_enter=self._on_enter_state,
         )
         self._publish_state(self._fsm.state)
 
         self.create_timer(self._dt, self._loop)
         self.get_logger().info(
-            f"Started. controller={self._mode} solver={self._solver} dt={self._dt}"
+            f"Started. controller={self._controller} solver={self._solver} dt={self._dt}"
         )
 
     def destroy_node(self) -> bool:
@@ -210,14 +269,10 @@ class DroneFSMNode(Node):
         self.get_logger().info(f"state={new_state} via {event.name}")
 
     def _publish_state(self, state: str) -> None:
-        msg = String()
-        msg.data = str(state)
-        self._pub_state.publish(msg)
+        self._pub_state.publish(_string_msg(state))
 
     def _publish_info(self, text: str) -> None:
-        msg = String()
-        msg.data = str(text)
-        self._pub_info.publish(msg)
+        self._pub_info.publish(_string_msg(text))
 
     def _on_cmd(self, msg: String) -> None:
         raw = (msg.data or "").strip()
@@ -230,88 +285,59 @@ class DroneFSMNode(Node):
         self._fsm.send(Event(event_name, raw))
 
     def _on_path(self, msg: RosPath) -> None:
-        self._behaviors.update_path(path_msg_points_enu(msg))
+        self._behaviors.update_path(_path_msg_points_enu(msg))
 
     def _on_ref_path(self, msg: RosPath) -> None:
-        self._behaviors.update_ref_traj(path_msg_points_enu(msg))
+        self._behaviors.update_ref_traj(_path_msg_points_enu(msg))
 
     def _on_yaw_cmd(self, msg: Float32) -> None:
         value = float(getattr(msg, "data", float("nan")))
         if np.isfinite(value):
-            self._behaviors.update_yaw_cmd_enu(value)
+            if self._fsm.state == STATE_HOVER_START:
+                self._behaviors.update_takeoff_yaw_cmd_enu()
+            else:
+                self._behaviors.update_yaw_cmd_enu(value)
 
     def _on_local_position(self, msg: VehicleLocalPosition) -> None:
-        heading = getattr(msg, "heading", None)
-        yaw_ned = float(heading) if heading is not None else 0.0
-        if not (heading is not None and np.isfinite(yaw_ned)):
-            yaw_ned = 0.0
-        yaw_ned = wrap_pi(yaw_ned)
-
-        pos_ned = (
-            getattr(msg, "x", float("nan")),
-            getattr(msg, "y", float("nan")),
-            getattr(msg, "z", float("nan")),
-        )
-        vel_ned = (
-            getattr(msg, "vx", float("nan")),
-            getattr(msg, "vy", float("nan")),
-            getattr(msg, "vz", float("nan")),
-        )
-        acc_ned = (
-            getattr(msg, "ax", float("nan")),
-            getattr(msg, "ay", float("nan")),
-            getattr(msg, "az", float("nan")),
-        )
-        if not (
-            is_finite_vec3(pos_ned)
-            and is_finite_vec3(vel_ned)
-            and is_finite_vec3(acc_ned)
-        ):
+        state = _vehicle_state_from_local_position(msg)
+        if state is None:
             return
-
-        self._behaviors.update_vehicle_state(
-            VehicleState(
-                position_enu=ned_to_enu(pos_ned),
-                velocity_enu=ned_to_enu(vel_ned),
-                accel_enu=ned_to_enu(acc_ned),
-                yaw_enu=yaw_ned_to_enu(yaw_ned),
-            )
-        )
+        self._behaviors.update_vehicle_state(state)
 
     def _loop(self) -> None:
         self._behaviors.tick(self._fsm.state, self._dt)
         self._maybe_auto_land()
 
+    def _reset_auto_land_count(self) -> None:
+        self._auto_land_stable_count = 0
+
     def _maybe_auto_land(self) -> None:
-        if not self._auto_land_enabled:
-            self._auto_land_stable_count = 0
-            return
-        if self._fsm.state != STATE_TRACKING:
-            self._auto_land_stable_count = 0
+        if not self._auto_land.enabled or self._fsm.state != STATE_TRACKING:
+            self._reset_auto_land_count()
             return
 
         valid, distance_m, speed_mps = self._behaviors.tracking_terminal_metrics()
         if not valid:
-            self._auto_land_stable_count = 0
+            self._reset_auto_land_count()
             return
 
         if (
-            distance_m < self._auto_land_distance_m
-            and speed_mps < self._auto_land_speed_mps
+            distance_m < self._auto_land.distance_m
+            and speed_mps < self._auto_land.speed_mps
         ):
             self._auto_land_stable_count += 1
         else:
-            self._auto_land_stable_count = 0
+            self._reset_auto_land_count()
             return
 
-        if self._auto_land_stable_count < self._auto_land_hold_cycles:
+        if self._auto_land_stable_count < self._auto_land.hold_cycles:
             return
 
-        self._auto_land_stable_count = 0
+        self._reset_auto_land_count()
         info = (
             "auto land triggered: "
             f"dist={distance_m:.3f} m speed={speed_mps:.3f} m/s "
-            f"stable_cycles={self._auto_land_hold_cycles}"
+            f"stable_cycles={self._auto_land.hold_cycles}"
         )
         self.get_logger().info(info)
         self._publish_info(info)

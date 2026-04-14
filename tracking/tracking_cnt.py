@@ -102,9 +102,6 @@ class PathTrackerCtbr:
         self._yaw_cmd_prev_enu: float | None = None
         self.last_debug: dict[str, object] = {}
 
-    def set_polyline(self, pts_enu: np.ndarray):
-        self._path_points = np.asarray(pts_enu, dtype=float).reshape(-1, 3)
-
     def reset_warmstart(self):
         self._warm_started = False
         self._u_last = np.zeros(3)
@@ -123,6 +120,7 @@ class PathTrackerCtbr:
         *,
         yaw_cmd_enu: float = np.pi / 2.0,
         ref_traj_enu: np.ndarray | None = None,
+        path_points_enu: np.ndarray | None = None,
         log_solver: bool = False,
     ):
         p = as_vec3(position_enu)
@@ -152,12 +150,15 @@ class PathTrackerCtbr:
             self._x_ws = x_sol
             self._u_ws = u_sol
         else:
-            if self._path_points.shape[0] < 2:
-                target = self._path_points[
-                    0
-                ]  # (3,) triggers straight-line mode with pg=p0 => hold
+            if path_points_enu is not None:
+                path_points = np.asarray(path_points_enu, dtype=float).reshape(-1, 3)
             else:
-                target = self._path_points
+                path_points = self._path_points
+
+            if path_points.shape[0] < 2:
+                target = path_points[0]
+            else:
+                target = path_points
 
             x_sol, u_sol, s_sol, vs_sol = self._opt.solve(
                 x0,
@@ -177,14 +178,13 @@ class PathTrackerCtbr:
 
         a_enu = x_sol[6:9, 0]
         jerk_enu = u_sol[:, 0]
-        
-        
+
         if self._yaw_cmd_prev_enu is None:
             yaw_rate_ff_enu = 0.0
         else:
-            yaw_rate_ff_enu = wrap_pi(yaw_cmd_enu - self._yaw_cmd_prev_enu) / step_dt
+            yaw_rate_ff_enu = wrap_pi(yaw_cmd_enu - self._yaw_cmd_prev_enu) / self.dt
         yaw_err_enu = wrap_pi(yaw_cmd_enu - yaw_enu)
-        yaw_rate_fb_enu = self._yaw_kp * yaw_err_enu / step_dt
+        yaw_rate_fb_enu = self._yaw_kp * yaw_err_enu / self.dt
         yaw_rate_enu = yaw_rate_ff_enu + yaw_rate_fb_enu
         if np.isfinite(self._yaw_rate_limit):
             yaw_rate_enu = float(
