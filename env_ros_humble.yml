@@ -1,0 +1,15 @@
+name: mpcc
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.10.*
+  - pip
+  - numpy
+  - scipy
+  - matplotlib
+  - packaging
+  - pip:
+      - casadi
+      - osqp
+      - pyyaml
