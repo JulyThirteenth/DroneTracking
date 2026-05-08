@@ -127,6 +127,7 @@ class DroneFSMNode(Node):
             log_enabled=log_enabled,
             log_flush_every=log_flush_every,
             takeoff_velocity=float(fsm_cfg.takeoff_velocity),
+            takeoff_height=float(fsm_cfg.takeoff_height),
             init_yaw_enu=float(_CFG.plan2track.init_yaw),
         )
 

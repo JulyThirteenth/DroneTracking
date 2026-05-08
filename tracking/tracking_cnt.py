@@ -6,7 +6,7 @@ CTBR tracking controller using MPC/MPCC:
 - `tracking_osqp.MPCOSQP` with optional HOCBF obstacle constraints
 
 This module intentionally contains no ROS node; the drone racing example uses the
-FSM node (`examples/drone_racing/fsm/fsm_node.py`) for orchestration and PX4
+FSM node (`examples/DroneTracking/fsm/fsm_node.py`) for orchestration and PX4
 offboard publishing.
 """
 
@@ -167,7 +167,6 @@ class PathTrackerCtbr:
                     obstacle_normals, obstacle_points = obstacle_points_to_planes(
                         p,
                         obstacle_points,
-                        safe_distance=float(self._opt.cbf.safe_distance),
                         max_obstacles=int(self._opt.cbf.max_obstacles),
                     )
                 x_sol, u_sol = self._opt.solve(

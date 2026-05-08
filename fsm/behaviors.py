@@ -49,6 +49,7 @@ class DroneBehaviors:
         log_enabled: bool = True,
         log_flush_every: int = 1,
         takeoff_velocity: float = 0.67,
+        takeoff_height: float = 1.0,
         init_yaw_enu: float = 0.0,
     ):
         self._bridge = Px4Bridge(node)
@@ -73,6 +74,7 @@ class DroneBehaviors:
                 "solver": str(solver),
                 "dt_control_s": float(cfg.control.dt),
                 "takeoff_velocity": float(takeoff_velocity),
+                "takeoff_height": float(takeoff_height),
             },
         )
         if self._csv_logger.enabled and self._csv_logger.run_dir is not None:
@@ -83,6 +85,7 @@ class DroneBehaviors:
         self._horizon_steps = int(getattr(self._tracker, "horizon", 10))
         self._tracker_dt_s = float(getattr(self._tracker, "dt", 0.1))
         self._takeoff_velocity = max(float(takeoff_velocity), 1e-3)
+        self._takeoff_height = max(float(takeoff_height), 0.0)
         self._init_yaw_enu = float(init_yaw_enu)
 
         self._vehicle_state: VehicleState | None = None
@@ -92,7 +95,7 @@ class DroneBehaviors:
 
         self._hold_point_enu: np.ndarray | None = None
         self._hold_key: str | None = None
-        self._yaw_cmd_enu: float = -np.pi / 2.0
+        self._yaw_cmd_enu: float = float(init_yaw_enu)
 
         # After AUTO.LAND, stop publishing offboard mode and rates setpoints.
         self._disengaged: bool = False
@@ -325,9 +328,9 @@ class DroneBehaviors:
             )
 
         target_enu = self._vehicle_state.position_enu.copy()
-        target_enu[2] += 1.0
+        target_enu[2] += self._takeoff_height
         return self._hold_target_once(
-            key="hover_start:takeoff_1m",
+            key="hover_start:takeoff_height",
             point_enu=target_enu,
         )
 

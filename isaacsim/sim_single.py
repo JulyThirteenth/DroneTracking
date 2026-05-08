@@ -300,7 +300,9 @@ def _select_behavior1k_scene_file(
 ) -> Path:
     scene_files = discover_behavior1k_scene_files(behavior1k_root)
     if not scene_files:
-        raise FileNotFoundError(f"No behavior1k scene files found under: {behavior1k_root}")
+        raise FileNotFoundError(
+            f"No behavior1k scene files found under: {behavior1k_root}"
+        )
 
     if scene_index is None:
         _print_indexed_files(

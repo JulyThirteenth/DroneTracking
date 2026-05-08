@@ -30,8 +30,7 @@ def _deep_update(base: dict[str, Any], override: dict[str, Any]) -> dict[str, An
 
 def resolve_config_path() -> Path:
     raw = (
-        os.environ.get("DRONE_RACING_CONFIG", "")
-        or os.environ.get("DRONE_RACING_TOPICS_CONFIG", "")
+        os.environ.get("DRONE_TRACKING_CONFIG", "")
         or DEFAULT_CONFIG_FILE
     ).strip()
     if not raw:
@@ -66,6 +65,7 @@ class FsmConfig:
     log_enabled: bool
     log_flush_every: int
     takeoff_velocity: float
+    takeoff_height: float
     auto_land: bool
     auto_land_distance: float
     auto_land_velocity: float
@@ -120,6 +120,7 @@ _FSM_DEFAULTS = {
     "log_enabled": True,
     "log_flush_every": 1,
     "takeoff_velocity": 0.67,
+    "takeoff_height": 1.0,
     "auto_land": False,
     "auto_land_distance": 0.1,
     "auto_land_velocity": 0.1,

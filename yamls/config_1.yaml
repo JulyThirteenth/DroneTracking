@@ -11,6 +11,7 @@ fsm:
   log_enabled: true
   log_flush_every: 1
   takeoff_velocity: 0.5
+  takeoff_height: 1.0
   auto_land: true
   auto_land_distance: 0.1
   auto_land_velocity: 0.1

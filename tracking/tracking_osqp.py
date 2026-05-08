@@ -33,7 +33,6 @@ def obstacle_points_to_planes(
     position_enu,
     obstacle_points_enu,
     *,
-    safe_distance: float,
     max_obstacles: int,
 ) -> tuple[np.ndarray, np.ndarray]:
     p = np.asarray(position_enu, dtype=float).reshape(3)

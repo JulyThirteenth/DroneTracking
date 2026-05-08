@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SESSION="${1:-dronecnt}"
-CONFIG_FILE="${2:-${DRONE_RACING_CONFIG:-}}"
+CONFIG_FILE="${2:-${DRONE_TRACKING_CONFIG:-}}"
 if [[ $# -gt 2 ]]; then
   echo "Usage: $0 [tmux_session_name] [config_yaml]"
   exit 1
@@ -15,7 +15,7 @@ PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 if tmux has-session -t "${SESSION}" 2>/dev/null; then
   if [[ -n "${CONFIG_FILE}" ]]; then
     echo "[INFO] tmux session '${SESSION}' already exists. Existing processes keep old config."
-    echo "[INFO] Recreate session to apply DRONE_RACING_CONFIG=${CONFIG_FILE}."
+    echo "[INFO] Recreate session to apply DRONE_TRACKING_CONFIG=${CONFIG_FILE}."
   fi
   tmux attach -t "${SESSION}"
   exit 0
@@ -29,8 +29,8 @@ P_FSM_NODE="$(tmux split-window -h -p 50 -t "${P_PLAN}" -P -F "#{pane_id}")"
 
 ENV_PREFIX=""
 if [[ -n "${CONFIG_FILE}" ]]; then
-  ENV_PREFIX="export DRONE_RACING_CONFIG=\"${CONFIG_FILE}\" && "
-  echo "[INFO] DRONE_RACING_CONFIG=${CONFIG_FILE}"
+  ENV_PREFIX="export DRONE_TRACKING_CONFIG=\"${CONFIG_FILE}\" && "
+  echo "[INFO] DRONE_TRACKING_CONFIG=${CONFIG_FILE}"
 fi
 
 DEPTH_TOPIC="${DEPTH_TOPIC:-/depth}"
@@ -40,7 +40,7 @@ DEPTH_FRAME_ID="${DEPTH_FRAME_ID:-drone_fpv_camera}"
 DEPTH_SCAN_CONFIG="${DEPTH_SCAN_CONFIG:-${PROJECT_DIR}/perception/yaml/depth_transform.yaml}"
 
 tmux send-keys -t "${P_PLAN}" \
-"cd \"${PROJECT_DIR}\" && source ./tools/simdrone_env.sh && ${ENV_PREFIX}python plan2track/plan2track.py" C-m
+"cd \"${PROJECT_DIR}\" && source ./tools/simdrone_env.sh && ${ENV_PREFIX}python plan2track/keyboard2track.py" C-m
 
 tmux send-keys -t "${P_FSM_NODE}" \
 "cd \"${PROJECT_DIR}\" && source ./tools/simdrone_env.sh && ${ENV_PREFIX}python fsm/fsm_node.py" C-m

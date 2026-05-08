@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Multi-vehicle Isaac Sim app for drone_racing.
+Multi-vehicle Isaac Sim app for DroneTracking.
 
 Startup flow (interactive):
 1) Select scene file from `scenes/`
