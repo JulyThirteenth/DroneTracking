@@ -103,6 +103,18 @@ class MpccCostConfig:
 
 
 @dataclass(frozen=True)
+class HocbfConfig:
+    enabled: bool = False
+    scan_topic: str = "/depth2scan/scan"
+    depth_camera_xyz: tuple[float, float, float] = (0.1, 0.0, 0.02)
+    obstacle_min_radius_m: float = 0.8
+    max_obstacles: int = 90
+    safe_distance: float = 0.9
+    lambda_gain: float = 0.8
+    slack_weight: float = 1.0e6
+
+
+@dataclass(frozen=True)
 class TrackingConfig:
     default_controller: str = "mpc"
     default_solver: str = "ipopt"
@@ -117,6 +129,7 @@ class TrackingConfig:
     constraints: ConstraintsConfig = field(default_factory=ConstraintsConfig)
     mpc_cost: MpcCostConfig = field(default_factory=MpcCostConfig)
     mpcc_cost: MpccCostConfig = field(default_factory=MpccCostConfig)
+    hocbf: HocbfConfig = field(default_factory=HocbfConfig)
 
 
 def _deep_update(base: dict, override: dict) -> dict:
@@ -148,6 +161,7 @@ def _load_default_config() -> TrackingConfig:
         constraints=ConstraintsConfig(**merged["constraints"]),
         mpc_cost=MpcCostConfig(**merged["mpc_cost"]),
         mpcc_cost=MpccCostConfig(**merged["mpcc_cost"]),
+        hocbf=HocbfConfig(**merged["hocbf"]),
     )
 
 

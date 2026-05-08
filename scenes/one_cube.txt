@@ -1,0 +1,2 @@
+# cuboid name cx cy cz sx sy sz yaw_deg pivot_x pivot_y pivot_z r g b opacity
+cuboid Cube 5.0 0.0 1.2 1.0 1.0 1.0 0.0 nan nan nan 0.8 0.2 0.2 0.45

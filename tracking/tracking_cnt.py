@@ -3,6 +3,7 @@
 CTBR tracking controller using MPC/MPCC:
 - `tracking_opt.MPC` (per-step reference tracking)
 - `tracking_opt.MPCC` / `tracking_osqp.MPCCOSQP` (MPCC)
+- `tracking_osqp.MPCOSQP` with optional HOCBF obstacle constraints
 
 This module intentionally contains no ROS node; the drone racing example uses the
 FSM node (`examples/drone_racing/fsm/fsm_node.py`) for orchestration and PX4
@@ -66,10 +67,20 @@ class PathTrackerCtbr:
 
         if self.controller == "mpc":
             if self.solver in {"osqp"}:
-                from tracking_osqp import MPCOSQP
+                from tracking_osqp import HOCBFConfig, MPCOSQP
 
-                self._opt = MPCOSQP(params)
+                cbf = None
+                if bool(cfg.hocbf.enabled):
+                    cbf = HOCBFConfig(
+                        max_obstacles=int(cfg.hocbf.max_obstacles),
+                        safe_distance=float(cfg.hocbf.safe_distance),
+                        lambda_gain=float(cfg.hocbf.lambda_gain),
+                        slack_weight=float(cfg.hocbf.slack_weight),
+                    )
+                self._opt = MPCOSQP(params, cbf=cbf)
             else:
+                if bool(cfg.hocbf.enabled):
+                    raise ValueError("HOCBF obstacle avoidance requires solver 'osqp'.")
                 from tracking_opt import MPC
 
                 self._opt = MPC(params)
@@ -121,6 +132,7 @@ class PathTrackerCtbr:
         yaw_cmd_enu: float = np.pi / 2.0,
         ref_traj_enu: np.ndarray | None = None,
         path_points_enu: np.ndarray | None = None,
+        obstacle_points_enu: np.ndarray | None = None,
         log_solver: bool = False,
     ):
         p = as_vec3(position_enu)
@@ -145,9 +157,33 @@ class PathTrackerCtbr:
                 ref_traj = np.repeat(p.reshape(3, 1), self.horizon + 1, axis=1)
             else:
                 ref_traj = np.asarray(ref_traj_enu, dtype=float)
-            x_sol, u_sol = self._opt.solve(
-                x0, u0, ref_traj, self._x_ws, self._u_ws, log=log_solver
-            )
+            if getattr(self._opt, "cbf", None) is not None:
+                obstacle_normals = None
+                obstacle_points = None
+                if obstacle_points_enu is not None:
+                    from tracking_osqp import obstacle_points_to_planes
+
+                    obstacle_points = np.asarray(obstacle_points_enu, dtype=float)
+                    obstacle_normals, obstacle_points = obstacle_points_to_planes(
+                        p,
+                        obstacle_points,
+                        safe_distance=float(self._opt.cbf.safe_distance),
+                        max_obstacles=int(self._opt.cbf.max_obstacles),
+                    )
+                x_sol, u_sol = self._opt.solve(
+                    x0,
+                    u0,
+                    ref_traj,
+                    self._x_ws,
+                    self._u_ws,
+                    obstacle_normals=obstacle_normals,
+                    obstacle_points=obstacle_points,
+                    log=log_solver,
+                )
+            else:
+                x_sol, u_sol = self._opt.solve(
+                    x0, u0, ref_traj, self._x_ws, self._u_ws, log=log_solver
+                )
             self._x_ws = x_sol
             self._u_ws = u_sol
         else:
@@ -183,9 +219,9 @@ class PathTrackerCtbr:
         if self._yaw_cmd_prev_enu is None:
             yaw_rate_ff_enu = 0.0
         else:
-            yaw_rate_ff_enu = wrap_pi(yaw_cmd_enu - self._yaw_cmd_prev_enu) / self.dt
-        yaw_err_enu = wrap_pi(yaw_cmd_enu - yaw_enu)
-        yaw_rate_fb_enu = self._yaw_kp * yaw_err_enu / self.dt
+            yaw_rate_ff_enu = wrap_pi(yaw_cmd_enu - self._yaw_cmd_prev_enu) / step_dt
+        yaw_err_enu = wrap_pi(yaw_cmd_enu - yaw_enu) 
+        yaw_rate_fb_enu = self._yaw_kp * yaw_err_enu / step_dt
         yaw_rate_enu = yaw_rate_ff_enu + yaw_rate_fb_enu
         if np.isfinite(self._yaw_rate_limit):
             yaw_rate_enu = float(

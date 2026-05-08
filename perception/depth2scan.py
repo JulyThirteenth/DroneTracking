@@ -14,13 +14,14 @@ from __future__ import annotations
 import math
 import sys
 from pathlib import Path
-
 import numpy as np
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image, LaserScan, PointCloud2
 from sensor_msgs_py import point_cloud2
+from std_msgs.msg import Header
 
 _PERCEPTION_ROOT = Path(__file__).resolve().parent
 if str(_PERCEPTION_ROOT) not in sys.path:
@@ -70,17 +71,17 @@ def _image_to_depth_array(msg: Image) -> np.ndarray:
     return depth.astype(np.float32, copy=False)
 
 
-class Depth2ObstNode(Node):
+class Depth2ScanNode(Node):
     """ROS2 node that publishes pseudo laser-scan obstacle points from depth."""
 
     def __init__(self) -> None:
-        super().__init__("depth2obst")
+        super().__init__("depth2scan")
 
         self.declare_parameter("depth_topic", "/depth/image")
-        self.declare_parameter("scan_topic", "/depth2obst/scan")
-        self.declare_parameter("points_topic", "/depth2obst/points")
+        self.declare_parameter("scan_topic", "/depth2scan/scan")
+        self.declare_parameter("points_topic", "/depth2scan/points")
         self.declare_parameter("config_path", "")
-        self.declare_parameter("frame_id", "")
+        self.declare_parameter("frame_id", "/map")
         self.declare_parameter("fov_x_deg", 90.0)
         self.declare_parameter("fov_y_deg", 90.0)
         self.declare_parameter("dist_scale", 1.0)
@@ -96,6 +97,10 @@ class Depth2ObstNode(Node):
         self._points_topic = str(self.get_parameter("points_topic").value)
         self._frame_id = str(self.get_parameter("frame_id").value)
         queue_size = int(self.get_parameter("queue_size").value)
+        self._depth_count = 0
+        self._scan_count = 0
+        self._last_status_depth_count = 0
+        self._last_status_scan_count = 0
 
         self._cfg = self._load_config_from_params()
         height = float(self.get_parameter("height").value)
@@ -105,12 +110,33 @@ class Depth2ObstNode(Node):
         self._pub_points = self.create_publisher(
             PointCloud2, self._points_topic, queue_size
         )
-        self.create_subscription(Image, self._depth_topic, self._on_depth, queue_size)
+        self._sub_depth = self.create_subscription(
+            Image,
+            self._depth_topic,
+            self._on_depth,
+            qos_profile_sensor_data,
+        )
+        self.create_timer(1.0, self._log_status)
 
         self.get_logger().info(
-            "depth2obst subscribed to "
+            "depth2scan subscribed to "
             f"{self._depth_topic}, publishing {self._scan_topic} and {self._points_topic}"
         )
+
+    def _log_status(self) -> None:
+        depth_publishers = self.count_publishers(self._depth_topic)
+        scan_subscribers = self.count_subscribers(self._scan_topic)
+        depth_stalled = self._depth_count == self._last_status_depth_count
+        scan_stalled = self._scan_count == self._last_status_scan_count
+        if depth_publishers == 0 or depth_stalled or scan_stalled:
+            self.get_logger().warn(
+                "depth2scan status: "
+                f"received={self._depth_count}, published={self._scan_count}, "
+                f"depth_publishers={depth_publishers}, "
+                f"scan_subscribers={scan_subscribers}"
+            )
+        self._last_status_depth_count = self._depth_count
+        self._last_status_scan_count = self._scan_count
 
     def _load_config_from_params(self) -> Config:
         config_path = str(self.get_parameter("config_path").value).strip()
@@ -142,6 +168,7 @@ class Depth2ObstNode(Node):
         )
 
     def _on_depth(self, msg: Image) -> None:
+        self._depth_count += 1
         try:
             depth = _image_to_depth_array(msg)
             x_coord, y_coord, angles, dist = depth_layer_scan(
@@ -155,38 +182,54 @@ class Depth2ObstNode(Node):
 
         frame_id = self._frame_id or msg.header.frame_id
         if angles is None or dist is None:
-            angles = self._empty_angles()
+            angles = self._scan_angles()
             dist = np.full_like(
                 angles, self._cfg.laserscan.default_value, dtype=np.float32
             )
-            x_coord = dist * np.cos(angles)
-            y_coord = dist * np.sin(angles)
+        else:
+            angles = self._scan_angles()
+        range_max = float(self._cfg.laserscan.default_value)
+        valid = np.isfinite(dist) & (dist > 0.0) & (dist < range_max)
+        x_coord = dist[valid] * np.cos(angles[valid])
+        y_coord = dist[valid] * np.sin(angles[valid])
 
-        self._pub_scan.publish(self._to_laser_scan(msg, frame_id, angles, dist))
-        self._pub_points.publish(self._to_point_cloud(msg, frame_id, x_coord, y_coord))
-
-    def _empty_angles(self) -> np.ndarray:
-        fov_x = float(self._cfg.sensor.fov_deg[0])
-        boundaries = np.linspace(
-            math.radians(fov_x / 2.0),
-            math.radians(fov_x * 1.5),
-            int(self._cfg.laserscan.n_intervals) + 1,
+        stamp = self.get_clock().now().to_msg()
+        self._pub_scan.publish(self._to_laser_scan(stamp, frame_id, angles, dist))
+        self._pub_points.publish(
+            self._to_point_cloud(stamp, frame_id, x_coord, y_coord)
         )
-        return ((boundaries[:-1] + boundaries[1:]) * 0.5).astype(np.float32)
+        self._scan_count += 1
+
+    def _scan_angles(self) -> np.ndarray:
+        fov_x = float(self._cfg.sensor.fov_deg[0])
+        return np.linspace(
+            math.radians(-fov_x / 2.0),
+            math.radians(fov_x / 2.0),
+            int(self._cfg.laserscan.n_intervals),
+            dtype=np.float32,
+        )
 
     def _to_laser_scan(
         self,
-        image_msg: Image,
+        stamp,
         frame_id: str,
         angles: np.ndarray,
         dist: np.ndarray,
     ) -> LaserScan:
         scan = LaserScan()
-        scan.header.stamp = image_msg.header.stamp
+        scan.header.stamp = stamp
         scan.header.frame_id = frame_id
-        scan.range_min = 0.0
+        scan.range_min = 0.05
         scan.range_max = float(self._cfg.laserscan.default_value)
-        scan.ranges = np.asarray(dist, dtype=np.float32).tolist()
+        ranges = np.asarray(dist, dtype=np.float32)
+        angles = self._scan_angles()
+        if ranges.shape[0] != angles.shape[0]:
+            fixed = np.full(angles.shape, np.inf, dtype=np.float32)
+            count = min(fixed.shape[0], ranges.shape[0])
+            fixed[:count] = ranges[:count]
+            ranges = fixed
+        ranges = np.where(ranges >= scan.range_max, np.inf, ranges)
+        scan.ranges = ranges.tolist()
 
         if len(angles) >= 2:
             scan.angle_min = float(angles[0])
@@ -200,7 +243,7 @@ class Depth2ObstNode(Node):
 
     def _to_point_cloud(
         self,
-        image_msg: Image,
+        stamp,
         frame_id: str,
         x_coord: np.ndarray,
         y_coord: np.ndarray,
@@ -212,14 +255,15 @@ class Depth2ObstNode(Node):
                 np.zeros_like(x_coord, dtype=np.float32),
             ]
         )
-        header = image_msg.header
+        header = Header()
+        header.stamp = stamp
         header.frame_id = frame_id
         return point_cloud2.create_cloud_xyz32(header, points.tolist())
 
 
 def main() -> None:
     rclpy.init()
-    node = Depth2ObstNode()
+    node = Depth2ScanNode()
     try:
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):

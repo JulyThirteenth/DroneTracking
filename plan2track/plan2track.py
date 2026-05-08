@@ -207,7 +207,8 @@ class PathReferenceBuilder:
         delta = np.asarray(p1 - p0, dtype=float).reshape(3)
         if float(np.linalg.norm(delta[:2])) < _MIN_YAW_DELTA_M:
             return float(last_yaw)
-        return float(np.arctan2(delta[1], delta[0]))
+        yaw = float(np.arctan2(delta[1], delta[0]))
+        return float(last_yaw + wrap_pi(yaw - float(last_yaw)))
 
     def _monotonic_progress(self, s_closest: float, length: float) -> float:
         if self._last_s is None:
@@ -314,7 +315,7 @@ class Plan2TrackNode(Node):
         self._yaw_enu = 0.0
         self._yaw_cmd_enu_last = float(self._io_cfg.init_yaw)
         self._yaw_sample_ds_m = max(
-            float(self._tracking_cfg.mpc.v_ref) * float(self._tracking_cfg.control.dt),
+            float(self._tracking_cfg.mpc.v_ref) * float(self._tracking_cfg.mpc.dt),
             1e-6,
         )
 

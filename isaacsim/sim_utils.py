@@ -1,36 +1,13 @@
 from pathlib import Path
+import sys
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
-def ned_to_enu(v):
-    v = np.asarray(v, dtype=float).reshape(3)
-    return np.array([v[1], v[0], -v[2]], dtype=float)
-
-
-def _prim_utils():
-    import isaacsim.core.utils.prims as prim_utils
-
-    return prim_utils
-
-
-def load_waypoints_ned(path: Path):
-    waypoints = []
-    if not path.exists():
-        return waypoints
-
-    for line in path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        parts = stripped.replace(",", " ").split()
-        if len(parts) < 2:
-            continue
-        x = float(parts[0])
-        y = float(parts[1])
-        z = float(parts[2]) if len(parts) >= 3 else 0.0
-        waypoints.append(np.array([x, y, z], dtype=float))
-    return waypoints
+from tracking.tracking_utils import load_waypoints_ned, ned_to_enu
 
 
 def _read_scene_rows(path: Path) -> list[list[str]]:
@@ -149,7 +126,8 @@ def spawn_cuboid(
     - `size`: (sx,sy,sz) edge lengths in meters.
     - `pivot`: if provided, rotates `center` around pivot by `yaw_deg` (matches env_utils behavior).
     """
-    prim_utils = _prim_utils()
+    import isaacsim.core.utils.prims as prim_utils
+
     if prim_utils.is_prim_path_valid(prim_path):
         return
 
@@ -200,7 +178,8 @@ def spawn_gate(
 
     Gate is composed of 5 cuboids (base, bottom, upper, left, right).
     """
-    prim_utils = _prim_utils()
+    import isaacsim.core.utils.prims as prim_utils
+
     if prim_utils.is_prim_path_valid(prim_path):
         return
 
@@ -281,7 +260,8 @@ def generate_scene(
     """
     Create scene content from a single scene txt file.
     """
-    prim_utils = _prim_utils()
+    import isaacsim.core.utils.prims as prim_utils
+
     if not prim_utils.is_prim_path_valid(env_root):
         prim_utils.create_prim(env_root, "Xform")
 
@@ -333,7 +313,11 @@ def generate_waypoint(
     opacity: float = 0.1,
 ):
     """
-    Create transparent waypoint sphere markers (no collisions).
+    Draw waypoint markers in the viewport only.
+
+    These markers are not USD geometry, so they do not collide and do not appear
+    in camera RGB/depth rendering. `stage` and `parent_path` are kept only for
+    call-site compatibility.
 
     Pass either:
     - `task_path`: file path with NED waypoints (x y z per line)
@@ -348,29 +332,13 @@ def generate_waypoint(
     if not waypoints_ned:
         return 0
 
-    prim_utils = _prim_utils()
-    if not prim_utils.is_prim_path_valid(parent_path):
-        prim_utils.create_prim(parent_path, "Xform")
+    from isaacsim.util.debug_draw import _debug_draw
 
-    from pxr import Gf, UsdGeom
+    _ = stage, parent_path
+    points = [tuple(ned_to_enu(wp_ned).tolist()) for wp_ned in waypoints_ned]
+    rgba = tuple(map(float, color)) + (float(opacity),)
+    size = max(1.0, float(radius) * 200.0)
 
-    created = 0
-    for i, wp_ned in enumerate(waypoints_ned):
-        wp_enu = ned_to_enu(wp_ned)
-        prim_path = f"{parent_path}/wp_{i:02d}"
-        if prim_utils.is_prim_path_valid(prim_path):
-            continue
-        prim_utils.create_prim(
-            prim_path,
-            "Sphere",
-            position=wp_enu,
-            attributes={"radius": float(radius)},
-        )
-        prim = stage.GetPrimAtPath(prim_path)
-        gprim = UsdGeom.Gprim(prim)
-        gprim.CreateDisplayColorAttr().Set([Gf.Vec3f(*map(float, color))])
-        gprim.CreateDisplayOpacityAttr().Set([float(opacity)])
-        created += 1
-    return created
-
-
+    draw = _debug_draw.acquire_debug_draw_interface()
+    draw.draw_points(points, [rgba] * len(points), [size] * len(points))
+    return len(points)

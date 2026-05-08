@@ -22,6 +22,7 @@ from fsm_spec import (
     STATE_RETURN_HOVER,
     STATE_TRACKING,
 )
+
 _CONTROLLER_MPC = "mpc"
 _CONTROLLER_MPCC = "mpcc"
 _PX4_CMD_NAV_LAND = 21
@@ -145,7 +146,12 @@ class DroneBehaviors:
             self._send_land()
             self._reset_tracking_inputs()
 
-    def tick(self, fsm_state: str, dt: float) -> None:
+    def tick(
+        self,
+        fsm_state: str,
+        dt: float,
+        obstacle_points_enu: np.ndarray | None = None,
+    ) -> None:
         """Advance the behavior loop for the current FSM state."""
         if (
             self._vehicle_state is None
@@ -157,9 +163,13 @@ class DroneBehaviors:
         self._bridge.publish_offboard_mode()
 
         ref_traj_enu = self._reference_for_state(fsm_state)
-        p_cmd, q_cmd, r_cmd, thrust = self._run_tracker(ref_traj_enu, dt)
+        p_cmd, q_cmd, r_cmd, thrust = self._run_tracker(
+            ref_traj_enu,
+            dt,
+            obstacle_points_enu,
+        )
         self._bridge.publish_rates_setpoint(p_cmd, q_cmd, r_cmd, thrust)
-        self._log_tick(fsm_state, p_cmd, q_cmd, r_cmd, thrust)
+        self._log_tick(fsm_state, ref_traj_enu, p_cmd, q_cmd, r_cmd, thrust)
 
     def _set_start_point_once(self, point_enu: np.ndarray, *, source: str) -> None:
         if self._start_point_enu is not None:
@@ -224,10 +234,17 @@ class DroneBehaviors:
         return self._path_points_enu
 
     def _run_tracker(
-        self, reference_enu: np.ndarray | None, dt: float
+        self,
+        reference_enu: np.ndarray | None,
+        dt: float,
+        obstacle_points_enu: np.ndarray | None,
     ) -> tuple[float, float, float, float]:
-        ref_traj_enu = reference_enu if self._controller == _CONTROLLER_MPC else None
-        path_points_enu = reference_enu if self._controller == _CONTROLLER_MPCC else None
+        ref_traj_enu = (
+            reference_enu if self._controller == _CONTROLLER_MPC else None
+        )
+        path_points_enu = (
+            reference_enu if self._controller == _CONTROLLER_MPCC else None
+        )
         p_cmd, q_cmd, r_cmd, thrust, _ = self._tracker.step(
             self._vehicle_state.position_enu,
             self._vehicle_state.velocity_enu,
@@ -237,6 +254,7 @@ class DroneBehaviors:
             yaw_cmd_enu=self._yaw_cmd_enu,
             ref_traj_enu=ref_traj_enu,
             path_points_enu=path_points_enu,
+            obstacle_points_enu=obstacle_points_enu,
             log_solver=False,
         )
         return float(p_cmd), float(q_cmd), float(r_cmd), float(thrust)
@@ -244,6 +262,7 @@ class DroneBehaviors:
     def _log_tick(
         self,
         fsm_state: str,
+        reference_enu: np.ndarray | None,
         p_cmd: float,
         q_cmd: float,
         r_cmd: float,
@@ -258,6 +277,7 @@ class DroneBehaviors:
                 TickData(
                     fsm_state=str(fsm_state),
                     pos_enu=np.asarray(self._vehicle_state.position_enu, dtype=float),
+                    ref_enu=self._first_reference_point_enu(reference_enu),
                     vel_enu=np.asarray(self._vehicle_state.velocity_enu, dtype=float),
                     acc_enu=np.asarray(self._vehicle_state.accel_enu, dtype=float),
                     yaw_enu=float(self._vehicle_state.yaw_enu),
@@ -265,6 +285,7 @@ class DroneBehaviors:
                     q_cmd=float(q_cmd),
                     r_cmd=float(r_cmd),
                     thrust_cmd=float(thrust),
+                    acc_est_enu=debug.get("a_est_enu", None),
                     jerk_cmd_enu=debug.get("jerk_cmd_enu", None),
                     acc_cmd_enu=debug.get("acc_cmd_enu", None),
                     jerk_cmd_ned=debug.get("jerk_cmd_ned", None),
@@ -277,6 +298,22 @@ class DroneBehaviors:
             )
         except Exception:
             pass
+
+    def _first_reference_point_enu(
+        self, reference_enu: np.ndarray | None
+    ) -> np.ndarray | None:
+        if reference_enu is None:
+            return None
+        ref = np.asarray(reference_enu, dtype=float)
+        if ref.size < 3:
+            return None
+        if ref.ndim == 1:
+            return ref.reshape(-1)[:3].copy()
+        if ref.shape[0] == 3:
+            return ref[:, 0].reshape(3).copy()
+        if ref.shape[1] >= 3:
+            return ref[0, :3].reshape(3).copy()
+        return None
 
     def _hold_position(self, fsm_state: str) -> np.ndarray | None:
         """Return an ENU point to hold, or None if no hold override is needed."""

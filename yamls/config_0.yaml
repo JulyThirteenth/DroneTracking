@@ -22,7 +22,7 @@ plan2track:
   out_path_topic: /tracking/path
   vehicle_pose_topic: /tracking/vehicle_pose
   yaw_cmd_topic: /planning/yaw_cmd_enu
-  fixed_yaw: true
+  fixed_yaw: false
   init_yaw: 0.0
 
   path_file: ""
@@ -41,11 +41,11 @@ tracking_ros:
 tracking:
   tasks:
     dir_name: tasks
-    waypoint_file: comp_waypoint_1.txt
+    waypoint_file: line_waypoint.txt
   mpc:
     dt: 0.1
     horizon: 15
-    v_ref: 3.0
+    v_ref: 1.0
   control:
     dt: 0.01
   yaw:
@@ -57,22 +57,22 @@ tracking:
     thrust_min: 0.1
     thrust_max: 0.9
   accel_fusion:
-    imu_alpha: 0.01
+    imu_alpha: 0.05
   constraints:
-    u_min: [-25.0, -25.0, -25.0]
-    u_max: [25.0, 25.0, 25.0]
-    du_min: [-50.0, -50.0, -50.0]
-    du_max: [50.0, 50.0, 50.0]
+    u_min: [-10.0, -10.0, -10.0]
+    u_max: [10.0, 10.0, 10.0]
+    du_min: [-30.0, -30.0, -30.0]
+    du_max: [30.0, 30.0, 30.0]
     v_min: [-8.0, -8.0, -8.0]
     v_max: [8.0, 8.0, 8.0]
-    a_min: [-20.0, -20.0, -10.0]
-    a_max: [20.0, 20.0, 20.0]
+    a_min: [-4.0, -4.0, -4.0]
+    a_max: [4.0, 4.0, 4.0]
     v_slack_weight: 10000.0
     a_slack_weight: 10000.0
   mpc_cost:
-    Q_diag: [2000.0, 2000.0, 2000.0]
-    R_diag: [0.0, 0.0, 0.0]
-    Rd_diag: [0.2, 0.2, 0.2]
+    Q_diag: [300.0, 300.0, 500.0]
+    R_diag: [0.1, 0.1, 0.1]
+    Rd_diag: [1.0, 1.0, 1.0]
     terminal: 1.0
   mpcc_cost:
     q_contour: 200.0
@@ -81,3 +81,12 @@ tracking:
     q_terminal_s: 0.0
     vs_max: 3.0
     vs_min: 0.0
+  hocbf:
+    enabled: true
+    scan_topic: /depth2scan/scan
+    depth_camera_xyz: [0.1, 0.0, 0.02]
+    obstacle_min_radius_m: 0.8
+    max_obstacles: 90
+    safe_distance: 0.9
+    lambda_gain: 0.8
+    slack_weight: 1000000.0

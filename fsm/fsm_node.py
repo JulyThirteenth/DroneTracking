@@ -24,6 +24,7 @@ from px4_msgs.msg import VehicleLocalPosition
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Float32, String
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -89,6 +90,52 @@ def _path_msg_points_enu(msg: RosPath) -> np.ndarray:
     return np.array(
         [[ps.pose.position.x, ps.pose.position.y, ps.pose.position.z] for ps in poses],
         dtype=float,
+    )
+
+
+def _scan_msg_points_enu(
+    msg: LaserScan,
+    state: VehicleState,
+    *,
+    camera_xyz_body: np.ndarray,
+    min_radius_m: float,
+) -> np.ndarray | None:
+    ranges = np.asarray(msg.ranges, dtype=float)
+    if ranges.size == 0:
+        return None
+
+    angles = float(msg.angle_min) + np.arange(ranges.size) * float(msg.angle_increment)
+    valid = np.isfinite(ranges) & (ranges > float(msg.range_min))
+    if np.isfinite(float(msg.range_max)):
+        valid &= ranges < float(msg.range_max)
+    if not np.any(valid):
+        return None
+
+    ranges = ranges[valid]
+    angles = angles[valid]
+    cam = np.asarray(camera_xyz_body, dtype=float).reshape(3)
+    x_body = cam[0] + ranges * np.cos(angles)
+    y_body = cam[1] + ranges * np.sin(angles)
+    z_body = np.full_like(x_body, cam[2])
+
+    radius = np.sqrt(x_body * x_body + y_body * y_body + z_body * z_body)
+    keep = radius > float(min_radius_m)
+    if not np.any(keep):
+        return None
+    x_body = x_body[keep]
+    y_body = y_body[keep]
+    z_body = z_body[keep]
+
+    pos = np.asarray(state.position_enu, dtype=float).reshape(3)
+    yaw = float(state.yaw_enu)
+    c = np.cos(yaw)
+    s = np.sin(yaw)
+    return np.column_stack(
+        (
+            pos[0] + c * x_body - s * y_body,
+            pos[1] + s * x_body + c * y_body,
+            pos[2] + z_body,
+        )
     )
 
 
@@ -160,6 +207,11 @@ class DroneFSMNode(Node):
         self._dt = float(self._tracking_cfg.control.dt)
         self._controller = str(controller).lower().strip()
         self._solver = str(solver).lower().strip()
+        self._use_depth_obstacles = (
+            self._controller == "mpc" and bool(self._tracking_cfg.hocbf.enabled)
+        )
+        self._vehicle_state: VehicleState | None = None
+        self._latest_scan: LaserScan | None = None
         self._auto_land = AutoLandConfig(
             enabled=bool(fsm_cfg.auto_land),
             distance_m=float(fsm_cfg.auto_land_distance_m),
@@ -222,8 +274,7 @@ class DroneFSMNode(Node):
             init_yaw_enu=float(_CFG.plan2track.init_yaw),
         )
 
-        # Subscribe to path topics based on controller type.
-        # MPC uses a reference path for tracking, while other controllers use a direct path input.
+        # MPC uses a reference trajectory, while MPCC uses a path input.
         if self._controller == "mpc":
             self.create_subscription(
                 RosPath, str(fsm_cfg.ref_path_topic), self._on_ref_path, 10
@@ -242,6 +293,15 @@ class DroneFSMNode(Node):
             self._on_local_position,
             qos_px4_out,
         )
+        if self._use_depth_obstacles:
+            hocbf = self._tracking_cfg.hocbf
+            scan_topic = str(hocbf.scan_topic)
+            self._depth_camera_xyz = np.asarray(
+                hocbf.depth_camera_xyz, dtype=float
+            ).reshape(3)
+            self._obstacle_min_radius_m = float(hocbf.obstacle_min_radius_m)
+            self.create_subscription(LaserScan, scan_topic, self._on_scan, 10)
+            self.get_logger().info(f"Subscribed scan: {scan_topic}")
 
         self._fsm = FiniteStateMachine(
             initial=STATE_PREFLIGHT,
@@ -302,10 +362,29 @@ class DroneFSMNode(Node):
         state = _vehicle_state_from_local_position(msg)
         if state is None:
             return
+        self._vehicle_state = state
         self._behaviors.update_vehicle_state(state)
 
+    def _on_scan(self, msg: LaserScan) -> None:
+        self._latest_scan = msg
+
     def _loop(self) -> None:
-        self._behaviors.tick(self._fsm.state, self._dt)
+        obstacle_points = None
+        if (
+            self._use_depth_obstacles
+            and self._fsm.state == STATE_TRACKING
+            and self._latest_scan is not None
+            and self._vehicle_state is not None
+        ):
+            obstacle_points = _scan_msg_points_enu(
+                self._latest_scan,
+                self._vehicle_state,
+                camera_xyz_body=getattr(
+                    self, "_depth_camera_xyz", np.array([0.1, 0.0, 0.02])
+                ),
+                min_radius_m=float(getattr(self, "_obstacle_min_radius_m", 0.8)),
+            )
+        self._behaviors.tick(self._fsm.state, self._dt, obstacle_points)
         self._maybe_auto_land()
 
     def _reset_auto_land_count(self) -> None:

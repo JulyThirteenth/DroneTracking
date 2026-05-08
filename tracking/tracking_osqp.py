@@ -11,6 +11,59 @@ from tracking_utils import (
     sample_polyline_with_tangent,
 )
 
+_SOLVED_STATUSES = {"solved", "solved inaccurate"}
+
+
+@dataclass(frozen=True)
+class HOCBFConfig:
+    """High-order CBF settings for triple-integrator obstacle avoidance."""
+
+    max_obstacles: int = 90
+    safe_distance: float = 0.9
+    lambda_gain: float = 0.8
+    slack_weight: float = 1.0e6
+
+    @property
+    def gains(self) -> tuple[float, float, float]:
+        lam = float(self.lambda_gain)
+        return lam**3, 3.0 * lam * lam, 3.0 * lam
+
+
+def obstacle_points_to_planes(
+    position_enu,
+    obstacle_points_enu,
+    *,
+    safe_distance: float,
+    max_obstacles: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    p = np.asarray(position_enu, dtype=float).reshape(3)
+    pts = np.asarray(obstacle_points_enu, dtype=float)
+    if pts.size == 0:
+        return np.zeros((0, 3), dtype=float), np.zeros((0, 3), dtype=float)
+
+    pts = pts.reshape(-1, 3)
+    pts = pts[np.isfinite(pts).all(axis=1)]
+    if pts.shape[0] == 0:
+        return np.zeros((0, 3), dtype=float), np.zeros((0, 3), dtype=float)
+
+    vec = p.reshape(1, 3) - pts
+    dist = np.linalg.norm(vec, axis=1)
+    keep = dist > 1e-6
+    pts = pts[keep]
+    vec = vec[keep]
+    dist = dist[keep]
+    if pts.shape[0] == 0:
+        return np.zeros((0, 3), dtype=float), np.zeros((0, 3), dtype=float)
+
+    max_obstacles = int(max_obstacles)
+    if max_obstacles > 0 and pts.shape[0] > max_obstacles:
+        keep = np.argsort(dist)[:max_obstacles]
+        pts = pts[keep]
+        vec = vec[keep]
+        dist = dist[keep]
+
+    return vec / dist.reshape(-1, 1), pts
+
 
 def uav_jerk_discrete_matrices(dt: float) -> tuple[np.ndarray, np.ndarray]:
     """
@@ -86,8 +139,9 @@ class MPCOSQP:
     - The tracked reference may be a per-step trajectory: `ref_traj` with shape (n_track, N+1).
     """
 
-    def __init__(self, params):
+    def __init__(self, params, cbf=None):
         self.params = params
+        self.cbf = cbf
         self.solver_times: list[float] = []
 
         self._idx: _Idx | None = None
@@ -100,6 +154,11 @@ class MPCOSQP:
 
         self._rows_x0: slice | None = None
         self._rows_du0: slice | None = None
+        self._rows_cbf: slice | None = None
+        self._cbf_slack0: int | None = None
+        self._nvar: int | None = None
+        self._A = None
+        self._A_pos: dict[tuple[int, int], int] = {}
 
     def setup(self):
         try:
@@ -115,6 +174,7 @@ class MPCOSQP:
         N = int(getattr(p, "horizon"))
         nx = int(getattr(p, "nx"))
         nu = int(getattr(p, "nu"))
+        K = int(getattr(self.cbf, "max_obstacles", 0)) if self.cbf is not None else 0
 
         have_v = (getattr(p, "v_min", None) is not None) and (
             getattr(p, "v_max", None) is not None
@@ -129,7 +189,8 @@ class MPCOSQP:
         sa0 = (sv0 + 3 * (N + 1)) if have_v else (u0 + nu * N)
         sa0 = sa0 if have_a else None
         idx = _Idx(nx=nx, nu=nu, N=N, x0=x0, u0=u0, sv0=sv0, sa0=sa0)
-        nvar = idx.nvar
+        cbf_slack0 = idx.nvar if K > 0 else None
+        nvar = idx.nvar + (N * K if K > 0 else 0)
 
         # --------------------
         # Objective: 0.5 z' P z + q' z
@@ -173,6 +234,10 @@ class MPCOSQP:
             for k in range(N + 1):
                 sk = idx.sa(k)
                 P[sk, sk] += 2.0 * w * np.eye(3)
+        if cbf_slack0 is not None:
+            w = float(getattr(self.cbf, "slack_weight"))
+            for i in range(N * K):
+                P[cbf_slack0 + i, cbf_slack0 + i] += 2.0 * w
 
         # --------------------
         # Constraints: l <= A z <= u
@@ -262,6 +327,25 @@ class MPCOSQP:
         l_base = np.concatenate(l) if l else np.zeros(0, dtype=float)
         u_base = np.concatenate(u) if u else np.zeros(0, dtype=float)
 
+        if K > 0:
+            cbf_start = A_base.shape[0]
+            cbf_rows = np.zeros((N * K, nvar), dtype=float)
+            eps = 1e-12
+            for k in range(N):
+                xk = idx.x(k)
+                uk = idx.u(k)
+                cols = list(range(xk.start, xk.start + 9)) + list(
+                    range(uk.start, uk.start + 3)
+                )
+                for i in range(K):
+                    cbf_rows[k * K + i, cols + [cbf_slack0 + k * K + i]] = eps
+            A_base = np.vstack([A_base, cbf_rows])
+            l_base = np.concatenate([l_base, np.full(N * K, -np.inf)])
+            u_base = np.concatenate([u_base, np.full(N * K, np.inf)])
+            rows_cbf = slice(cbf_start, cbf_start + N * K)
+        else:
+            rows_cbf = slice(A_base.shape[0], A_base.shape[0])
+
         # Variable bounds via stacked identity constraints.
         l_var = np.full(nvar, -np.inf, dtype=float)
         u_var = np.full(nvar, np.inf, dtype=float)
@@ -282,6 +366,8 @@ class MPCOSQP:
         if have_a:
             for k in range(N + 1):
                 l_var[idx.sa(k)] = 0.0
+        if cbf_slack0 is not None:
+            l_var[cbf_slack0 : cbf_slack0 + N * K] = 0.0
 
         # Stack [A_base; I]
         import scipy.sparse as sp
@@ -303,7 +389,16 @@ class MPCOSQP:
             u=u_full,
             verbose=False,
             warm_start=True,
+            max_iter=10000,
         )
+
+        A_pos: dict[tuple[int, int], int] = {}
+        if K > 0:
+            for col in range(A_sp.shape[1]):
+                start = int(A_sp.indptr[col])
+                end = int(A_sp.indptr[col + 1])
+                for data_i in range(start, end):
+                    A_pos[(int(A_sp.indices[data_i]), col)] = data_i
 
         self._idx = idx
         self._solver = solver
@@ -313,6 +408,11 @@ class MPCOSQP:
         self._u_var = u_var
         self._rows_x0 = rows_x0
         self._rows_du0 = rows_du0
+        self._rows_cbf = rows_cbf
+        self._cbf_slack0 = cbf_slack0
+        self._nvar = nvar
+        self._A = A_sp
+        self._A_pos = A_pos
 
     @staticmethod
     def _coerce_ref_traj(ref, *, n_track: int, horizon: int) -> np.ndarray:
@@ -346,7 +446,68 @@ class MPCOSQP:
             f"or ({n_track}, {horizon}) / ({horizon}, {n_track}); got {arr.shape}"
         )
 
-    def solve(self, x0, u0, ref, x_ws, u_ws, log: bool = False):
+    def _set_cbf_rows(
+        self,
+        l_base: np.ndarray,
+        u_base: np.ndarray,
+        normals,
+        points,
+    ) -> None:
+        if self.cbf is None:
+            return
+        if self._idx is None or self._A is None or self._rows_cbf is None:
+            raise RuntimeError("Call setup() before solve().")
+
+        idx = self._idx
+        K = int(getattr(self.cbf, "max_obstacles"))
+        normals = np.asarray(normals, dtype=float).reshape(-1, 3)
+        points = np.asarray(points, dtype=float).reshape(-1, 3)
+        count = min(K, normals.shape[0], points.shape[0])
+        k0, k1, k2 = self.cbf.gains
+        safe = float(getattr(self.cbf, "safe_distance"))
+
+        for k in range(idx.N):
+            xk = idx.x(k)
+            uk = idx.u(k)
+            cols = list(range(xk.start, xk.start + 9)) + list(
+                range(uk.start, uk.start + 3)
+            )
+            for i in range(K):
+                row = self._rows_cbf.start + k * K + i
+                active = (
+                    i < count
+                    and np.isfinite(normals[i]).all()
+                    and np.isfinite(points[i]).all()
+                )
+                n = normals[i] if active else np.zeros(3, dtype=float)
+                obs = points[i] if active else np.zeros(3, dtype=float)
+                coeffs = np.r_[k0 * n, k1 * n, k2 * n, n]
+
+                for col, value in zip(cols, coeffs):
+                    pos = self._A_pos.get((row, col))
+                    if pos is not None:
+                        self._A.data[pos] = float(value)
+                if self._cbf_slack0 is not None:
+                    slack_col = self._cbf_slack0 + k * K + i
+                    pos = self._A_pos.get((row, slack_col))
+                    if pos is not None:
+                        self._A.data[pos] = 1.0 if active else 0.0
+
+                l_base[row] = k0 * (float(np.dot(n, obs)) + safe) if active else -np.inf
+                u_base[row] = np.inf
+
+    def solve(
+        self,
+        x0,
+        u0,
+        ref,
+        x_ws,
+        u_ws,
+        *,
+        obstacle_normals=None,
+        obstacle_points=None,
+        log: bool = False,
+    ):
         if self._solver is None or self._idx is None:
             raise RuntimeError("Call setup() before solve().")
 
@@ -367,7 +528,8 @@ class MPCOSQP:
         ref_traj = self._coerce_ref_traj(ref, n_track=len(track_idx), horizon=N)
 
         # q term (tracking + du0)
-        q = np.zeros(idx.nvar, dtype=float)
+        nvar = int(self._nvar or idx.nvar)
+        q = np.zeros(nvar, dtype=float)
         for k in range(N):
             xk = idx.x(k)
             q[xk.start + track_idx] += -2.0 * (Q @ ref_traj[:, k])
@@ -392,6 +554,12 @@ class MPCOSQP:
             l_base[self._rows_du0] = u0 + float(getattr(p, "dt")) * du_min
             u_base[self._rows_du0] = u0 + float(getattr(p, "dt")) * du_max
 
+        if self.cbf is not None:
+            if obstacle_normals is None or obstacle_points is None:
+                obstacle_normals = np.zeros((0, 3), dtype=float)
+                obstacle_points = np.zeros((0, 3), dtype=float)
+            self._set_cbf_rows(l_base, u_base, obstacle_normals, obstacle_points)
+
         l = np.concatenate([l_base, self._l_var])
         u = np.concatenate([u_base, self._u_var])
 
@@ -401,13 +569,16 @@ class MPCOSQP:
         x_ws = np.hstack([x_ws[:, 1:], x_ws[:, -1:]])
         u_ws = np.hstack([u_ws[:, 1:], u_ws[:, -1:]]) if N > 1 else u_ws.copy()
 
-        z0 = np.zeros(idx.nvar, dtype=float)
+        z0 = np.zeros(nvar, dtype=float)
         for k in range(N + 1):
             z0[idx.x(k)] = x_ws[:, k]
         for k in range(N):
             z0[idx.u(k)] = u_ws[:, k]
 
-        self._solver.update(q=q, l=l, u=u)
+        if self.cbf is None:
+            self._solver.update(q=q, l=l, u=u)
+        else:
+            self._solver.update(Ax=self._A.data, q=q, l=l, u=u)
         self._solver.warm_start(x=z0)
 
         t0 = time.perf_counter()
@@ -423,7 +594,8 @@ class MPCOSQP:
                 f"status: {res.info.status}"
             )
 
-        if res.x is None:
+        status = str(res.info.status).lower()
+        if status not in _SOLVED_STATUSES or res.x is None:
             raise RuntimeError(f"OSQP failed: {res.info.status}")
 
         z = np.asarray(res.x, dtype=float).reshape(-1)

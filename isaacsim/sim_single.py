@@ -1,18 +1,10 @@
 #!/usr/bin/env python
-"""
-| File: 1_px4_single_vehicle.py
-| Author: Marcelo Jacinto (marcelo.jacinto@tecnico.ulisboa.pt)
-| License: BSD-3-Clause. Copyright (c) 2023, Marcelo Jacinto. All rights reserved.
-| Description: This files serves as an example on how to build an app that makes use of the Pegasus API to run a simulation with a single vehicle, controlled using the MAVLink control backend.
-"""
-
 from pathlib import Path
 import math
 import numpy as np
 from scipy.spatial.transform import Rotation
 
 from sim_utils import ned_to_enu, load_waypoints_ned, generate_scene, generate_waypoint
-
 
 ROS_CAMERA_GRAPH_PATH = "/ROSCameraGraph"
 CAMERA_PRIM_PATH = "/World/quadrotor/body/camera_fpv"
@@ -73,7 +65,7 @@ class PegasusApp:
         # Create the vehicle
         # Try to spawn the selected robot in the world to the specified namespace
         config_multirotor = MultirotorConfig()
-        config_multirotor.drag = LinearDrag([0.0, 0.0, 0.0])
+        config_multirotor.drag = LinearDrag([0.1, 0.1, 0.0])
         # Create the multirotor configuration
         mavlink_config = PX4MavlinkBackendConfig(
             {
@@ -84,8 +76,6 @@ class PegasusApp:
             }
         )
         config_multirotor.backends = [PX4MavlinkBackend(mavlink_config)]
-
-        
 
         spawn_pos_enu = [0.0, 0.0, 0.07]
         if waypoints_ned:
@@ -144,12 +134,11 @@ class PegasusApp:
         # Auxiliar variable for the timeline callback example
         self.stop_sim = False
 
-
     def _add_fpv_camera(self):
         import omni.isaac.core.utils.prims as prim_utils
         import omni.isaac.core.utils.numpy.rotations as rot_utils
         from omni.isaac.sensor import Camera
-       
+
         """
         Attaches a camera to the drone and sets its intrinsic properties for a specific FOV.
         """
@@ -158,18 +147,22 @@ class PegasusApp:
         # Define camera intrinsic properties
         # Example: To achieve a 90-degree horizontal FOV, the focal length should be half the horizontal aperture.
         # FOV = 2 * atan(aperture / (2 * focal_length))
-        
+
         # Let's set a desired horizontal FOV in degrees
         desired_fov_degrees = 90.0
-        
+
         # We can fix the horizontal aperture (sensor width) to a common value, e.g., 24mm
         horizontal_aperture = 24.0
-        
+
         # Calculate the required focal length
-        focal_length = horizontal_aperture / (2 * math.tan(math.radians(desired_fov_degrees) / 2.0))
-        
+        focal_length = horizontal_aperture / (
+            2 * math.tan(math.radians(desired_fov_degrees) / 2.0)
+        )
+
         # Calculate the vertical aperture based on the image aspect ratio
-        vertical_aperture = horizontal_aperture * (CAMERA_RESOLUTION[1] / CAMERA_RESOLUTION[0])
+        vertical_aperture = horizontal_aperture * (
+            CAMERA_RESOLUTION[1] / CAMERA_RESOLUTION[0]
+        )
 
         print("-" * 50)
         print(f"Camera Settings for {desired_fov_degrees}-degree FOV:")
@@ -187,8 +180,8 @@ class PegasusApp:
                 "focalLength": focal_length,
                 "horizontalAperture": horizontal_aperture,
                 "verticalAperture": vertical_aperture,
-                "clippingRange": (0.2, 5.0), # Near and far clipping planes
-            }
+                "clippingRange": (0.2, 5.0),  # Near and far clipping planes
+            },
         )
 
         # Now, apply the high-level Isaac Sim Camera API to this prim for easy control
@@ -196,15 +189,17 @@ class PegasusApp:
             prim_path=CAMERA_PRIM_PATH,
             # The resolution of the output image is set here.
             # This is separate from the FOV.
-            resolution=CAMERA_RESOLUTION
+            resolution=CAMERA_RESOLUTION,
         )
         self.camera.initialize()
-        
+
         # Position and orient the camera on the drone
         cam_pos = np.array([0.1, 0.0, 0.0])
-        cam_orientation = rot_utils.euler_angles_to_quats(np.array([0.0, 0.0, 0.0]), degrees=True)
+        cam_orientation = rot_utils.euler_angles_to_quats(
+            np.array([0.0, 0.0, 0.0]), degrees=True
+        )
         self.camera.set_local_pose(translation=cam_pos, orientation=cam_orientation)
-        
+
         # ===================== MODIFIED CODE END =====================
 
     def _build_camera_graph(self):
@@ -214,6 +209,7 @@ class PegasusApp:
         """
         import omni.graph.core as og
         import usdrt.Sdf
+
         keys = og.Controller.Keys
         og.Controller.edit(
             {"graph_path": ROS_CAMERA_GRAPH_PATH, "evaluator_name": "push"},
@@ -222,41 +218,59 @@ class PegasusApp:
                     ("OnTick", "omni.graph.action.OnTick"),
                     ("createViewport", "isaacsim.core.nodes.IsaacCreateViewport"),
                     # 2. 设置分辨率（新增节点）
-                    ("setViewportResolution", "isaacsim.core.nodes.IsaacSetViewportResolution"),
-                    ("getViewportRenderProduct", "isaacsim.core.nodes.IsaacGetViewportRenderProduct"),
+                    (
+                        "setViewportResolution",
+                        "isaacsim.core.nodes.IsaacSetViewportResolution",
+                    ),
+                    (
+                        "getViewportRenderProduct",
+                        "isaacsim.core.nodes.IsaacGetViewportRenderProduct",
+                    ),
                     ("setCamera", "isaacsim.core.nodes.IsaacSetCameraOnRenderProduct"),
                     ("cameraHelperRgb", "isaacsim.ros2.bridge.ROS2CameraHelper"),
                     ("cameraHelperDepth", "isaacsim.ros2.bridge.ROS2CameraHelper"),
                 ],
                 keys.CONNECT: [
-                    # ("OnTick.outputs:tick", "createViewport.inputs:execIn"),
-                    # ("createViewport.outputs:execOut", "setViewportResolution.inputs:execIn"),
-                    # ("createViewport.outputs:viewport", "setViewportResolution.inputs:viewport"),
-                    # ("setViewportResolution.outputs:execOut", "getViewportRenderProduct.inputs:execIn"),
-                    # ("setViewportResolution.outputs:viewport", "getViewportRenderProduct.inputs:viewport"),
-                    # ("getViewportRenderProduct.outputs:execOut", "setCamera.inputs:execIn"),
-                    # ("setCamera.outputs:execOut", "cameraHelperRgb.inputs:execIn"),
-                    # ("setCamera.outputs:execOut", "cameraHelperDepth.inputs:execIn"),
-                    # ("getViewportRenderProduct.outputs:renderProductPath", "setCamera.inputs:renderProductPath"),
-                    # ("getViewportRenderProduct.outputs:renderProductPath", "cameraHelperRgb.inputs:renderProductPath"),
-                    # ("getViewportRenderProduct.outputs:renderProductPath", "cameraHelperDepth.inputs:renderProductPath"),
                     # 1. 执行流
                     ("OnTick.outputs:tick", "createViewport.inputs:execIn"),
-                    ("createViewport.outputs:execOut", "setViewportResolution.inputs:execIn"),
-                    ("setViewportResolution.outputs:execOut", "getViewportRenderProduct.inputs:execIn"),
-                    ("getViewportRenderProduct.outputs:execOut", "setCamera.inputs:execIn"),
+                    (
+                        "createViewport.outputs:execOut",
+                        "setViewportResolution.inputs:execIn",
+                    ),
+                    (
+                        "setViewportResolution.outputs:execOut",
+                        "getViewportRenderProduct.inputs:execIn",
+                    ),
+                    (
+                        "getViewportRenderProduct.outputs:execOut",
+                        "setCamera.inputs:execIn",
+                    ),
                     ("setCamera.outputs:execOut", "cameraHelperRgb.inputs:execIn"),
                     ("setCamera.outputs:execOut", "cameraHelperDepth.inputs:execIn"),
                     # 2. 渲染流
-                    ("getViewportRenderProduct.outputs:renderProductPath", "setCamera.inputs:renderProductPath"),
-                    ("getViewportRenderProduct.outputs:renderProductPath", "cameraHelperRgb.inputs:renderProductPath"),
-                    ("getViewportRenderProduct.outputs:renderProductPath", "cameraHelperDepth.inputs:renderProductPath"),
+                    (
+                        "getViewportRenderProduct.outputs:renderProductPath",
+                        "setCamera.inputs:renderProductPath",
+                    ),
+                    (
+                        "getViewportRenderProduct.outputs:renderProductPath",
+                        "cameraHelperRgb.inputs:renderProductPath",
+                    ),
+                    (
+                        "getViewportRenderProduct.outputs:renderProductPath",
+                        "cameraHelperDepth.inputs:renderProductPath",
+                    ),
                 ],
                 keys.SET_VALUES: [
                     ("createViewport.inputs:name", "fpv_camera_viewport"),
-                    ("setViewportResolution.inputs:viewport", "fpv_camera_viewport"),  # token
-                    ("getViewportRenderProduct.inputs:viewport", "fpv_camera_viewport"),  # token
-
+                    (
+                        "setViewportResolution.inputs:viewport",
+                        "fpv_camera_viewport",
+                    ),  # token
+                    (
+                        "getViewportRenderProduct.inputs:viewport",
+                        "fpv_camera_viewport",
+                    ),  # token
                     ("setViewportResolution.inputs:width", 640),
                     ("setViewportResolution.inputs:height", 480),
                     ("setCamera.inputs:cameraPrim", [usdrt.Sdf.Path(CAMERA_PRIM_PATH)]),
