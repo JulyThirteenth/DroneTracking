@@ -229,19 +229,20 @@ scan points, it behaves as the normal tracking MPC.
 Relevant YAML sections:
 
 - `runtime`: controller and solver selection
-- `fsm`: FSM topics, logging, takeoff velocity, and auto-land thresholds
-- `plan2track`: path topics, waypoint loading mode, loop mode, fixed yaw, and `init_yaw`
-- `tracking_ros`: PX4 ROS topics, target system, and `pub_offboard`
+- `topics`: FSM, planning, tracking, PX4, and perception ROS topics
+- `vehicle`: PX4 target system and offboard publication switch
+- `fsm`: FSM logging, takeoff, and auto-land behavior parameters
+- `plan2track`: waypoint loading mode, loop mode, fixed yaw, and initial yaw
 - `tracking.tasks`: waypoint file selection under `plan2track/waypoints`
 - `tracking.mpc`: horizon, timestep, and reference speed
-- `tracking.control`: controller timer period
+- `tracking.mpc.cost`: MPC cost weights
+- `tracking.mpcc`: MPCC cost weights and progress limits
+- `tracking.control_loop`: controller timer period
 - `tracking.yaw`: yaw gain and yaw-rate limit
 - `tracking.ctbr`: body-rate/thrust conversion parameters
 - `tracking.accel_fusion`: acceleration smoothing
 - `tracking.constraints`: MPC state/input bounds
-- `tracking.mpc_cost`: MPC cost weights
-- `tracking.mpcc_cost`: MPCC cost weights
-- `tracking.hocbf`: depth scan topic, camera offset, safety radius, gains, and slack weight
+- `tracking.hocbf`: camera offset, safety radius, gains, and slack weight
 
 ## Coordinate Notes
 
@@ -264,7 +265,10 @@ Relevant YAML sections:
 - `perception/depth2scan.py`: depth image to pseudo LaserScan converter
 - `tracking/tracking_cnt.py`: controller step, CTBR conversion, and yaw-rate logic
 - `tracking/tracking_osqp.py`: OSQP MPC/HOCBF solver implementation
+<<<<<<< HEAD
 - `tracking/tracking_ros.py`: PX4 ROS message bridge
+=======
+>>>>>>> 66427e1 (add obstacle avoidance)
 - `fsm/fsm_main.py`: FSM node startup
 - `fsm/fsm_node.py`: FSM ROS node and transition coordinator
 - `fsm/fsm_mpc.py`: MPC/MPCC behavior and tracker command publication

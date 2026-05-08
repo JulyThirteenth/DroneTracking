@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-import sys
 from typing import Callable
+import sys
 import numpy as np
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -168,12 +168,6 @@ def _load_default_config() -> TrackingConfig:
 DEFAULT_CONFIG = _load_default_config()
 
 
-def _vec3_or_none(value) -> np.ndarray | None:
-    if value is None:
-        return None
-    return np.asarray(value, dtype=float).reshape(3)
-
-
 @dataclass
 class MPCParamsCfg:
     nx: int
@@ -225,19 +219,23 @@ def make_mpc_params(cfg: TrackingConfig, *, with_dynamics: bool) -> MPCParamsCfg
         horizon=int(cfg.mpc.horizon),
         dyn_func=dyn,
         dt=float(cfg.mpc.dt),
-        u_min=_vec3_or_none(c.u_min),
-        u_max=_vec3_or_none(c.u_max),
-        du_min=_vec3_or_none(c.du_min),
-        du_max=_vec3_or_none(c.du_max),
+        u_min=None if c.u_min is None else np.asarray(c.u_min, dtype=float).reshape(3),
+        u_max=None if c.u_max is None else np.asarray(c.u_max, dtype=float).reshape(3),
+        du_min=(
+            None if c.du_min is None else np.asarray(c.du_min, dtype=float).reshape(3)
+        ),
+        du_max=(
+            None if c.du_max is None else np.asarray(c.du_max, dtype=float).reshape(3)
+        ),
         Q=np.diag(np.asarray(k.Q_diag, dtype=float).reshape(3)),
         R=np.diag(np.asarray(k.R_diag, dtype=float).reshape(3)),
         terminal=float(k.terminal),
         Rd=np.diag(np.asarray(k.Rd_diag, dtype=float).reshape(3)),
         track_idx=np.array([0, 1, 2], dtype=int),
-        v_min=_vec3_or_none(c.v_min),
-        v_max=_vec3_or_none(c.v_max),
-        a_min=_vec3_or_none(c.a_min),
-        a_max=_vec3_or_none(c.a_max),
+        v_min=None if c.v_min is None else np.asarray(c.v_min, dtype=float).reshape(3),
+        v_max=None if c.v_max is None else np.asarray(c.v_max, dtype=float).reshape(3),
+        a_min=None if c.a_min is None else np.asarray(c.a_min, dtype=float).reshape(3),
+        a_max=None if c.a_max is None else np.asarray(c.a_max, dtype=float).reshape(3),
         v_slack_weight=float(c.v_slack_weight),
         a_slack_weight=float(c.a_slack_weight),
     )
@@ -247,7 +245,7 @@ def make_mpcc_params(cfg: TrackingConfig, *, with_dynamics: bool) -> MPCCParamsC
     base = make_mpc_params(cfg, with_dynamics=with_dynamics)
     mpcc = cfg.mpcc_cost
     return MPCCParamsCfg(
-        **base.__dict__,  # type: ignore[arg-type]
+        **base.__dict__,
         q_contour=float(mpcc.q_contour),
         q_lag=float(mpcc.q_lag),
         q_progress=float(mpcc.q_progress),

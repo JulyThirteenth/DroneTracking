@@ -25,16 +25,20 @@ from px4_msgs.msg import VehicleLocalPosition
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from std_msgs.msg import Float32, String
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from tracking.tracking_cfg import DEFAULT_CONFIG
-from tracking.tracking_ros import TOPIC_VEHICLE_LOCAL_POSITION, qos_px4_out
 from tracking.tracking_utils import ned_to_enu, wrap_pi, yaw_ned_to_enu
 from fsm.fsm_ros import latched_qos
 from yamls.config import get_cfg
+
+_PROJECT_CFG = get_cfg()
+TOPIC_VEHICLE_LOCAL_POSITION = _PROJECT_CFG.topics.px4.vehicle_local_position
+
 
 STATE_TRACKING = "tracking"
 KEY_UP = "\x1b[A"
@@ -80,7 +84,7 @@ class Keyboard2TrackNode(Node):
         self._load_params()
 
         self._position_enu: np.ndarray | None = None
-        self._yaw_cmd_enu = float(self._cfg.plan2track.init_yaw)
+        self._yaw_cmd_enu = float(self._cfg.plan2track.yaw.init)
         self._speed = 0.0
         self._yaw_rate = 0.0
         self._fsm_state = ""
@@ -100,10 +104,10 @@ class Keyboard2TrackNode(Node):
         yaw = DEFAULT_CONFIG.yaw
         control = DEFAULT_CONFIG.control
 
-        self._frame_id = str(cfg.plan2track.frame_id)
+        self._frame_id = str(cfg.plan2track.path.frame_id)
         self._dt = self._param_float("mpc_dt", mpc.dt)
         self._horizon = self._param_int("horizon", mpc.horizon)
-        self._target_z = self._param_float("target_z", cfg.fsm.takeoff_height)
+        self._target_z = self._param_float("target_z", cfg.fsm.takeoff.height)
         self._publish_dt = self._param_float("publish_dt", max(float(control.dt), 0.02))
         self._linear_step = self._param_float("linear_step", 0.1)
         self._yaw_rate_step = self._param_float("yaw_rate_step", 0.1)
@@ -126,19 +130,24 @@ class Keyboard2TrackNode(Node):
             VehicleLocalPosition,
             TOPIC_VEHICLE_LOCAL_POSITION,
             self._on_vehicle_state,
-            qos_px4_out,
+            QoSProfile(
+                reliability=ReliabilityPolicy.BEST_EFFORT,
+                durability=DurabilityPolicy.VOLATILE,
+                history=HistoryPolicy.KEEP_LAST,
+                depth=10,
+            ),
         )
         self.create_subscription(
             String,
-            str(cfg.fsm.state_topic),
+            str(cfg.topics.fsm.state),
             self._on_fsm_state,
             latched_qos(1),
         )
         self._pub_ref = self.create_publisher(
-            NavPath, str(cfg.plan2track.ref_path_topic), 10
+            NavPath, str(cfg.topics.tracking.ref_traj_path), 10
         )
         self._pub_yaw = self.create_publisher(
-            Float32, str(cfg.plan2track.yaw_cmd_topic), 10
+            Float32, str(cfg.topics.planning.yaw_cmd_enu), 10
         )
         self._pub_vel = self.create_publisher(
             TwistStamped,
@@ -157,8 +166,8 @@ class Keyboard2TrackNode(Node):
         )
         self.get_logger().info(
             "publishing "
-            f"{self._cfg.plan2track.ref_path_topic}, "
-            f"{self._cfg.plan2track.yaw_cmd_topic}"
+            f"{self._cfg.topics.tracking.ref_traj_path}, "
+            f"{self._cfg.topics.planning.yaw_cmd_enu}"
         )
 
     def close(self) -> None:
@@ -208,9 +217,9 @@ class Keyboard2TrackNode(Node):
             return self._position_enu
 
         if self._hover_position_enu is None:
-            self._hover_position_enu = np.asarray(
-                self._position_enu, dtype=float
-            ).reshape(3).copy()
+            self._hover_position_enu = (
+                np.asarray(self._position_enu, dtype=float).reshape(3).copy()
+            )
         return self._hover_position_enu
 
     def _publish_refs(self, points_enu: np.ndarray, velocity_enu: np.ndarray) -> None:

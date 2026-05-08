@@ -11,7 +11,7 @@ from .fsm_log import FSMLogger
 from .fsm_mpc import MPCBehavior, MPCCBehavior
 from tracking.tracking_cnt import PathTrackerCtbr
 
-_DEFAULT_LOG_DIR = Path(__file__).resolve().parent.parent / "fsm" / "log"
+_DEFAULT_LOG_DIR = Path(__file__).resolve().parent/ "log"
 
 
 @dataclass(frozen=True)
@@ -31,10 +31,10 @@ class AutoLandMonitor:
     def from_fsm_cfg(cls, fsm_cfg: Any) -> "AutoLandMonitor":
         return cls(
             AutoLandConfig(
-                enabled=bool(fsm_cfg.auto_land),
-                distance=float(fsm_cfg.auto_land_distance),
-                velocity=float(fsm_cfg.auto_land_velocity),
-                hold_cycles=max(int(fsm_cfg.auto_land_hold_cycles), 1),
+                enabled=bool(fsm_cfg.auto_land.enabled),
+                distance=float(fsm_cfg.auto_land.distance),
+                velocity=float(fsm_cfg.auto_land.velocity),
+                hold_cycles=max(int(fsm_cfg.auto_land.hold_cycles), 1),
             )
         )
 
@@ -166,9 +166,9 @@ def fsm_creater(*, node_cls: type, cfg: Any) -> None:
     node = node_cls(
         controller=str(cfg.runtime.controller),
         solver=str(cfg.runtime.solver),
-        log_dir=(str(cfg.fsm.log_dir) or None),
-        log_enabled=bool(cfg.fsm.log_enabled),
-        log_flush_every=int(cfg.fsm.log_flush_every),
+        log_dir=(str(cfg.fsm.log.dir) or None),
+        log_enabled=bool(cfg.fsm.log.enabled),
+        log_flush_every=int(cfg.fsm.log.flush_every),
     )
     try:
         rclpy.spin(node)

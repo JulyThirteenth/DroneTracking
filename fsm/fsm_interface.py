@@ -179,14 +179,14 @@ class FsmTerminalApp(Node):
 def main() -> None:
     rclpy.init()
     node = FsmTerminalApp(
-        cmd_topic=str(_CFG.fsm.cmd_topic),
-        state_topic=str(_CFG.fsm.state_topic),
+        cmd_topic=str(_CFG.topics.fsm.cmd),
+        state_topic=str(_CFG.topics.fsm.state),
     )
     executor = SingleThreadedExecutor()
     executor.add_node(node)
 
     node.get_logger().info(
-        f"Listening. cmd_topic={_CFG.fsm.cmd_topic} state_topic={_CFG.fsm.state_topic}"
+        f"Listening. cmd_topic={_CFG.topics.fsm.cmd} state_topic={_CFG.topics.fsm.state}"
     )
     node.get_logger().info(f"info_topic={node._info_topic}")
     node.get_logger().info(f"config file: {_CFG.config_path}")

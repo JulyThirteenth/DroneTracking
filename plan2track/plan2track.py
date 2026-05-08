@@ -26,6 +26,7 @@ from px4_msgs.msg import VehicleLocalPosition
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from std_msgs.msg import Float32
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -38,7 +39,6 @@ def _add_project_to_sys_path() -> None:
 _add_project_to_sys_path()
 
 from tracking.tracking_cfg import DEFAULT_CONFIG, TrackingConfig
-from tracking.tracking_ros import TOPIC_VEHICLE_LOCAL_POSITION, qos_px4_out
 from tracking.tracking_utils import (
     as_vec3,
     closest_s_on_polyline,
@@ -61,6 +61,7 @@ _LOOP_WRAP_HIGH = 0.85
 _LOOP_WRAP_LOW = 0.15
 _MIN_PATH_LENGTH_M = 1e-6
 _MIN_YAW_DELTA_M = 1e-6
+TOPIC_VEHICLE_LOCAL_POSITION = _PROJECT_CFG.topics.px4.vehicle_local_position
 
 
 @dataclass(frozen=True)
@@ -280,7 +281,7 @@ def _resolve_path_file(
     if override is not None:
         return Path(override)
 
-    cfg_path_file = str(io_cfg.path_file).strip()
+    cfg_path_file = str(io_cfg.path.file).strip()
     if cfg_path_file:
         return Path(cfg_path_file)
 
@@ -300,19 +301,19 @@ class Plan2TrackNode(Node):
 
         self._tracking_cfg = cfg
         self._io_cfg = _PROJECT_CFG.plan2track
-        self._frame_id = str(self._io_cfg.frame_id).strip()
-        self._origin_mode = str(self._io_cfg.origin_mode).lower().strip()
+        self._frame_id = str(self._io_cfg.path.frame_id).strip()
+        self._origin_mode = str(self._io_cfg.path.origin_mode).lower().strip()
         self._path_file = _resolve_path_file(
             io_cfg=self._io_cfg,
             tracking_cfg=self._tracking_cfg,
             override=path_file,
         )
 
-        self._path_builder = PathReferenceBuilder(loop=bool(self._io_cfg.loop))
+        self._path_builder = PathReferenceBuilder(loop=bool(self._io_cfg.path.loop))
         self._have_state = False
         self._position_enu = np.zeros(3, dtype=float)
         self._yaw_enu = 0.0
-        self._yaw_cmd_enu_last = float(self._io_cfg.init_yaw)
+        self._yaw_cmd_enu_last = float(self._io_cfg.yaw.init)
         self._yaw_sample_ds_m = max(
             float(self._tracking_cfg.mpc.v_ref) * float(self._tracking_cfg.mpc.dt),
             1e-6,
@@ -328,22 +329,22 @@ class Plan2TrackNode(Node):
     def _create_publishers(self) -> None:
         self._pub_ref_path = self.create_publisher(
             NavPath,
-            str(self._io_cfg.ref_path_topic),
+            str(_PROJECT_CFG.topics.tracking.ref_traj_path),
             10,
         )
         self._pub_path = self.create_publisher(
             NavPath,
-            str(self._io_cfg.out_path_topic),
+            str(_PROJECT_CFG.topics.tracking.path),
             10,
         )
         self._pub_vehicle_pose = self.create_publisher(
             PoseStamped,
-            str(self._io_cfg.vehicle_pose_topic),
+            str(_PROJECT_CFG.topics.tracking.vehicle_pose),
             10,
         )
         self._pub_yaw_cmd = self.create_publisher(
             Float32,
-            str(self._io_cfg.yaw_cmd_topic),
+            str(_PROJECT_CFG.topics.planning.yaw_cmd_enu),
             10,
         )
 
@@ -352,11 +353,16 @@ class Plan2TrackNode(Node):
             VehicleLocalPosition,
             TOPIC_VEHICLE_LOCAL_POSITION,
             self._on_local_position,
-            qos_px4_out,
+            QoSProfile(
+                reliability=ReliabilityPolicy.BEST_EFFORT,
+                durability=DurabilityPolicy.VOLATILE,
+                history=HistoryPolicy.KEEP_LAST,
+                depth=10,
+            ),
         )
         self.create_subscription(
             NavPath,
-            str(self._io_cfg.path_topic),
+            str(_PROJECT_CFG.topics.planning.path),
             self._on_path,
             10,
         )
@@ -367,18 +373,18 @@ class Plan2TrackNode(Node):
             "path_file=%s publish ref_path=%s path=%s frame_id=%s"
             % (
                 str(self._path_file),
-                str(self._io_cfg.ref_path_topic),
-                str(self._io_cfg.out_path_topic),
+                str(_PROJECT_CFG.topics.tracking.ref_traj_path),
+                str(_PROJECT_CFG.topics.tracking.path),
                 str(self._frame_id),
             )
         )
         self.get_logger().info(
-            f"Publishing vehicle_pose: {self._io_cfg.vehicle_pose_topic}"
+            f"Publishing vehicle_pose: {_PROJECT_CFG.topics.tracking.vehicle_pose}"
         )
-        self.get_logger().info(f"Publishing yaw_cmd: {self._io_cfg.yaw_cmd_topic}")
+        self.get_logger().info(f"Publishing yaw_cmd: {_PROJECT_CFG.topics.planning.yaw_cmd_enu}")
         self.get_logger().info(
             "fixed_yaw=%s init_yaw=%.4f rad"
-            % (bool(self._io_cfg.fixed_yaw), float(self._io_cfg.init_yaw))
+            % (bool(self._io_cfg.yaw.fixed), float(self._io_cfg.yaw.init))
         )
         self.get_logger().info(f"yaw sample ds: {self._yaw_sample_ds_m:.4f} m")
 
@@ -445,8 +451,8 @@ class Plan2TrackNode(Node):
         yaw_cmd_enu = self._path_builder.yaw_cmd_enu(
             progress=progress,
             sample_ds_m=self._yaw_sample_ds_m,
-            fixed_yaw=bool(self._io_cfg.fixed_yaw),
-            init_yaw=float(self._io_cfg.init_yaw),
+            fixed_yaw=bool(self._io_cfg.yaw.fixed),
+            init_yaw=float(self._io_cfg.yaw.init),
             last_yaw=float(self._yaw_cmd_enu_last),
         )
         self._yaw_cmd_enu_last = float(yaw_cmd_enu)

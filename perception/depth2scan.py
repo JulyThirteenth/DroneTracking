@@ -1,14 +1,3 @@
-#!/usr/bin/env python3
-"""Convert ROS2 depth images into 2D obstacle scan points.
-
-Subscribed topics:
-  - `depth_topic` (`sensor_msgs/Image`): single-channel depth image.
-
-Published topics:
-  - `scan_topic` (`sensor_msgs/LaserScan`): pseudo 2D laser scan.
-  - `points_topic` (`sensor_msgs/PointCloud2`): scan endpoints as XYZ points.
-"""
-
 from __future__ import annotations
 
 import math

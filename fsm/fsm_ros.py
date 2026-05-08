@@ -24,12 +24,12 @@ from yamls.config import get_cfg
 
 _CFG = get_cfg()
 
-TOPIC_OFFBOARD_CONTROL_MODE = _CFG.tracking_ros.offboard_control_mode_topic
-TOPIC_VEHICLE_RATES_SETPOINT = _CFG.tracking_ros.vehicle_rates_setpoint_topic
-TOPIC_VEHICLE_COMMAND = _CFG.tracking_ros.vehicle_command_topic
-TOPIC_VEHICLE_LOCAL_POSITION = _CFG.tracking_ros.vehicle_local_position_topic
-TARGET_SYSTEM = int(_CFG.tracking_ros.target_system)
-PUB_OFFBOARD = bool(_CFG.tracking_ros.pub_offboard)
+TOPIC_OFFBOARD_CONTROL_MODE = _CFG.topics.px4.offboard_control_mode
+TOPIC_VEHICLE_RATES_SETPOINT = _CFG.topics.px4.vehicle_rates_setpoint
+TOPIC_VEHICLE_COMMAND = _CFG.topics.px4.vehicle_command
+TOPIC_VEHICLE_LOCAL_POSITION = _CFG.topics.px4.vehicle_local_position
+TARGET_SYSTEM = int(_CFG.vehicle.target_system)
+PUB_OFFBOARD = bool(_CFG.vehicle.pub_offboard)
 
 
 @dataclass

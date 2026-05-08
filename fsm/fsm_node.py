@@ -5,6 +5,7 @@ from nav_msgs.msg import Path as NavPath
 from px4_msgs.msg import VehicleLocalPosition
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Float32, String
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 
 from .fsm_core import Event, FiniteStateMachine
 from .fsm_main import AutoLandMonitor, behavior_creater
@@ -15,6 +16,7 @@ from .fsm_ros import (
     path_msg_points_enu,
     scan_msg_points_enu,
     vehicle_state_from_local_position,
+    TOPIC_VEHICLE_LOCAL_POSITION
 )
 from .fsm_spec import (
     CMD_TO_EVENT,
@@ -26,7 +28,6 @@ from .fsm_spec import (
 )
 from .fsm_wrap import FSMNodeBase
 from tracking.tracking_cfg import DEFAULT_CONFIG
-from tracking.tracking_ros import TOPIC_VEHICLE_LOCAL_POSITION, qos_px4_out
 from yamls.config import get_cfg
 
 _CFG = get_cfg()
@@ -53,44 +54,53 @@ class DroneFSMNode(FSMNodeBase):
         self._dt = float(self._tracking_cfg.control.dt)
         self._controller = str(controller).lower().strip()
         self._solver = str(solver).lower().strip()
-        self._init_yaw_enu = float(_CFG.plan2track.init_yaw)
+        self._init_yaw_enu = float(_CFG.plan2track.yaw.init)
         self._vehicle_state: VehicleState | None = None
         self._tracking_points_enu: np.ndarray | None = None
         self._latest_scan: LaserScan | None = None
         self._auto_land = AutoLandMonitor.from_fsm_cfg(self._fsm_cfg)
 
-        state_topic = str(self._fsm_cfg.state_topic)
+        state_topic = str(_CFG.topics.fsm.state)
         self._pub_state = self.create_publisher(String, state_topic, latched_qos(1))
         self._pub_info = self.create_publisher(
             String, derive_info_topic(state_topic), latched_qos(10)
         )
-        self.create_subscription(String, str(self._fsm_cfg.cmd_topic), self._on_cmd, 10)
+        self.create_subscription(String, str(_CFG.topics.fsm.cmd), self._on_cmd, 10)
         self.create_subscription(
-            Float32, str(_CFG.plan2track.yaw_cmd_topic), self._on_yaw_cmd, 10
+            Float32, str(_CFG.topics.planning.yaw_cmd_enu), self._on_yaw_cmd, 10
         )
         self.create_subscription(
             VehicleLocalPosition,
             TOPIC_VEHICLE_LOCAL_POSITION,
             self._on_local_position,
-            qos_px4_out,
+            QoSProfile(
+                reliability=ReliabilityPolicy.BEST_EFFORT,
+                durability=DurabilityPolicy.VOLATILE,
+                history=HistoryPolicy.KEEP_LAST,
+                depth=10,
+            ),
         )
 
         tracking_topic = (
-            str(self._fsm_cfg.ref_path_topic)
+            str(_CFG.topics.tracking.ref_traj_path)
             if self._controller == _MPC
-            else str(self._fsm_cfg.path_topic)
+            else str(_CFG.topics.tracking.path)
         )
         self.create_subscription(NavPath, tracking_topic, self._on_tracking_path, 10)
         self.get_logger().info(f"Subscribed tracking path: {tracking_topic}")
-        self.get_logger().info(f"Subscribed yaw_cmd: {_CFG.plan2track.yaw_cmd_topic}")
+        self.get_logger().info(f"Subscribed yaw_cmd: {_CFG.topics.planning.yaw_cmd_enu}")
 
         hocbf = self._tracking_cfg.hocbf
         self._use_depth_obstacles = self._controller == _MPC and bool(hocbf.enabled)
         if self._use_depth_obstacles:
-            self._depth_camera_xyz = np.asarray(hocbf.depth_camera_xyz, dtype=float).reshape(3)
+            self._depth_camera_xyz = np.asarray(
+                hocbf.depth_camera_xyz, dtype=float
+            ).reshape(3)
             self._obstacle_min_radius_m = float(hocbf.obstacle_min_radius_m)
-            self.create_subscription(LaserScan, str(hocbf.scan_topic), self._on_scan, 10)
-            self.get_logger().info(f"Subscribed scan: {hocbf.scan_topic}")
+            self.create_subscription(
+                LaserScan, str(_CFG.topics.perception.scan), self._on_scan, 10
+            )
+            self.get_logger().info(f"Subscribed scan: {_CFG.topics.perception.scan}")
 
         self.get_logger().info(f"config file: {_CFG.config_path}")
         self._behavior = behavior_creater(
@@ -101,8 +111,8 @@ class DroneFSMNode(FSMNodeBase):
             log_dir=log_dir,
             log_enabled=log_enabled,
             log_flush_every=log_flush_every,
-            takeoff_velocity=float(self._fsm_cfg.takeoff_velocity),
-            takeoff_height=float(self._fsm_cfg.takeoff_height),
+            takeoff_velocity=float(self._fsm_cfg.takeoff.velocity),
+            takeoff_height=float(self._fsm_cfg.takeoff.height),
             init_yaw_enu=self._init_yaw_enu,
         )
 
