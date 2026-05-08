@@ -27,6 +27,7 @@ from tracking.tracking_utils import (
     wrap_pi,
     yaw_enu_to_ned,
     yaw_rate_enu_to_ned,
+    obstacle_points_to_planes,
 )
 
 
@@ -161,7 +162,7 @@ class PathTrackerCtbr:
                 obstacle_normals = None
                 obstacle_points = None
                 if obstacle_points_enu is not None:
-                    from tracking.tracking_osqp import obstacle_points_to_planes
+                    
 
                     obstacle_points = np.asarray(obstacle_points_enu, dtype=float)
                     obstacle_normals, obstacle_points = obstacle_points_to_planes(

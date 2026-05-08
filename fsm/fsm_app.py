@@ -16,7 +16,6 @@ import queue
 import sys
 import threading
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
 import rclpy
@@ -38,17 +37,22 @@ from fsm_ros import derive_info_topic, latched_qos
 from yamls.config import get_cfg
 _CFG = get_cfg()
 
-@dataclass(frozen=True)
-class _CommandHelp:
-    cmd: str
-    description: str
-
-
-_BUILTIN_COMMANDS: tuple[_CommandHelp, ...] = (
-    _CommandHelp("help", "Show available operations for current state."),
-    _CommandHelp("state", "Print the latest FSM state."),
-    _CommandHelp("quit", "Exit this application."),
+_BUILTIN_COMMANDS: tuple[tuple[str, str], ...] = (
+    ("help", "Show available operations for current state."),
+    ("state", "Print the latest FSM state."),
+    ("quit", "Exit this application."),
 )
+_EXIT_COMMANDS = {"quit", "exit"}
+_HELP_COMMANDS = {"help", "?"}
+_STATE_COMMANDS = {"state", "status"}
+
+_events_by_state: dict[str, set[str]] = {}
+for _src, _event, _dst in TRANSITION_SPECS:
+    _events_by_state.setdefault(str(_src), set()).add(str(_event))
+_EVENTS_BY_STATE = {
+    state: tuple(sorted(events)) for state, events in _events_by_state.items()
+}
+del _events_by_state
 
 
 class FsmTerminalApp(Node):
@@ -61,10 +65,13 @@ class FsmTerminalApp(Node):
         self._info_topic = derive_info_topic(self._state_topic)
 
         self._pub_cmd = self.create_publisher(String, self._cmd_topic, 10)
-        self.create_subscription(String, self._state_topic, self._on_state, latched_qos(depth=1))
-        self.create_subscription(String, self._info_topic, self._on_info, latched_qos(depth=10))
+        self.create_subscription(
+            String, self._state_topic, self._on_state, latched_qos(depth=1)
+        )
+        self.create_subscription(
+            String, self._info_topic, self._on_info, latched_qos(depth=10)
+        )
 
-        self._transitions = tuple(TRANSITION_SPECS)
         self._state_lock = threading.Lock()
         self._fsm_state: str | None = None
         self._state_changed = False
@@ -104,79 +111,64 @@ class FsmTerminalApp(Node):
             return msgs
 
     def allowed_events(self, state: str) -> tuple[str, ...]:
-        events = sorted(
-            {event for src, event, _dst in self._transitions if src == state}
-        )
-        return tuple(events)
+        return _EVENTS_BY_STATE.get(state, ())
 
     def allowed_commands(self, state: str) -> tuple[str, ...]:
-        cmds: list[str] = []
-        for event_name in self.allowed_events(state):
-            aliases = EVENT_ALIASES.get(event_name)
-            if not aliases:
-                continue
-            # Prefer the English alias for display.
-            cmd_en = str(aliases[-1])
-            cmds.append(cmd_en)
-        return tuple(cmds)
+        return tuple(
+            str(aliases[-1])
+            for event_name in self.allowed_events(state)
+            if (aliases := EVENT_ALIASES.get(event_name))
+        )
 
     def state_banner(self) -> str:
         state = self.latest_state() or "unknown"
-        cmds = self.allowed_commands(state)
-        if cmds:
-            ops = " ".join(cmds)
-        else:
-            ops = "(no known operations)"
+        ops = " ".join(self.allowed_commands(state)) or "(no known operations)"
         return f"state={state} ops={ops}"
 
     def print_help(self) -> None:
         state = self.latest_state() or "unknown"
-        events = self.allowed_events(state)
-        cmds = self.allowed_commands(state)
-
         self.get_logger().info(self.state_banner())
-        if events:
-            pairs: list[str] = []
-            for event_name in events:
-                aliases = EVENT_ALIASES.get(event_name)
-                if not aliases:
-                    continue
-                cn, en = str(aliases[0]), str(aliases[-1])
-                pairs.append(f"{en}/{cn}")
-            if pairs:
-                self.get_logger().info(f"FSM commands: {' '.join(pairs)}")
-            else:
-                self.get_logger().info("FSM commands: (none)")
-        else:
-            self.get_logger().info("FSM commands: (none)")
+        self.get_logger().info(f"FSM commands: {self._fsm_help_text(state)}")
 
-        for item in _BUILTIN_COMMANDS:
-            self.get_logger().info(f"{item.cmd:<6} - {item.description}")
+        for cmd, desc in _BUILTIN_COMMANDS:
+            self.get_logger().info(f"{cmd:<6} - {desc}")
 
     def maybe_publish_cmd(self, raw: str) -> bool:
         """Publish a valid FSM command. Returns True if published."""
-        key = (raw or "").strip()
-        if not key:
-            return False
-
-        token = key.split()[0].strip().lower()
-        event_name = CMD_TO_EVENT.get(token) or CMD_TO_EVENT.get(key)
+        token, event_name = self._parse_cmd(raw)
         if event_name is None:
             return False
 
-        state = self.latest_state()
-        if state is not None:
-            allowed = set(self.allowed_events(state))
-            if event_name not in allowed:
-                self.get_logger().warning(
-                    f"Command '{token}' not allowed from state '{state}'."
-                )
-                return False
+        if not self._is_event_allowed(event_name, token):
+            return False
 
         msg = String()
         msg.data = token
         self._pub_cmd.publish(msg)
         return True
+
+    def _fsm_help_text(self, state: str) -> str:
+        pairs = []
+        for event_name in self.allowed_events(state):
+            aliases = EVENT_ALIASES.get(event_name)
+            if aliases:
+                pairs.append(f"{aliases[-1]}/{aliases[0]}")
+        return " ".join(pairs) or "(none)"
+
+    def _parse_cmd(self, raw: str) -> tuple[str, str | None]:
+        key = (raw or "").strip()
+        token = key.split()[0].strip().lower() if key else ""
+        return token, CMD_TO_EVENT.get(token) or CMD_TO_EVENT.get(key)
+
+    def _is_event_allowed(self, event_name: str, token: str) -> bool:
+        state = self.latest_state()
+        if state is None or event_name in self.allowed_events(state):
+            return True
+
+        self.get_logger().warning(
+            f"Command '{token}' not allowed from state '{state}'."
+        )
+        return False
 
 
 def _stdin_reader(cmd_queue: queue.Queue[str], stop: threading.Event) -> None:
@@ -197,6 +189,56 @@ def _print_prompt(node: FsmTerminalApp) -> None:
 def _redraw_prompt(node: FsmTerminalApp) -> None:
     sys.stdout.write("\r\x1b[2K")
     _print_prompt(node)
+
+
+def _print_info_messages(node: FsmTerminalApp) -> None:
+    messages = node.consume_info_messages()
+    for text in messages:
+        node.get_logger().info(text)
+    if messages:
+        _redraw_prompt(node)
+
+
+def _handle_builtin_cmd(node: FsmTerminalApp, cmd: str, stop: threading.Event) -> bool:
+    if cmd in _EXIT_COMMANDS:
+        stop.set()
+        return True
+
+    if cmd in _HELP_COMMANDS:
+        node.print_help()
+        _print_prompt(node)
+        return True
+
+    if cmd in _STATE_COMMANDS:
+        node.get_logger().info(node.state_banner())
+        _print_prompt(node)
+        return True
+
+    return False
+
+
+def _handle_user_cmd(node: FsmTerminalApp, cmd: str, stop: threading.Event) -> None:
+    if _handle_builtin_cmd(node, cmd, stop):
+        return
+
+    if not node.maybe_publish_cmd(cmd):
+        node.get_logger().warning(
+            f"Unknown command '{cmd}'. Type 'help' to see options."
+        )
+        _print_prompt(node)
+
+
+def _drain_user_cmds(
+    node: FsmTerminalApp,
+    cmd_queue: queue.Queue[str],
+    stop: threading.Event,
+) -> None:
+    while not stop.is_set():
+        try:
+            cmd = cmd_queue.get_nowait()
+        except queue.Empty:
+            return
+        _handle_user_cmd(node, cmd, stop)
 
 
 def main() -> None:
@@ -225,38 +267,8 @@ def main() -> None:
         while rclpy.ok() and not stop.is_set():
             executor.spin_once(timeout_sec=0.1)
 
-            info_messages = node.consume_info_messages()
-            for text in info_messages:
-                node.get_logger().info(text)
-            if info_messages:
-                _redraw_prompt(node)
-
-            while True:
-                try:
-                    cmd = cmd_queue.get_nowait()
-                except queue.Empty:
-                    break
-
-                if cmd in {"quit", "exit"}:
-                    stop.set()
-                    break
-
-                if cmd in {"help", "?"}:
-                    node.print_help()
-                    _print_prompt(node)
-                    continue
-
-                if cmd in {"state", "status"}:
-                    node.get_logger().info(node.state_banner())
-                    _print_prompt(node)
-                    continue
-
-                published = node.maybe_publish_cmd(cmd)
-                if not published:
-                    node.get_logger().warning(
-                        f"Unknown command '{cmd}'. Type 'help' to see options."
-                    )
-                    _print_prompt(node)
+            _print_info_messages(node)
+            _drain_user_cmds(node, cmd_queue, stop)
 
             if node.consume_state_changed():
                 _redraw_prompt(node)

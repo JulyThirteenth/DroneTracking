@@ -277,6 +277,39 @@ def sample_polyline_with_tangent(
     pr = a + (ds / seg_len) * seg
     return (pr, t)
 
+def obstacle_points_to_planes(
+    position_enu,
+    obstacle_points_enu,
+    *,
+    max_obstacles: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    p = np.asarray(position_enu, dtype=float).reshape(3)
+    pts = np.asarray(obstacle_points_enu, dtype=float)
+    if pts.size == 0:
+        return np.zeros((0, 3), dtype=float), np.zeros((0, 3), dtype=float)
+
+    pts = pts.reshape(-1, 3)
+    pts = pts[np.isfinite(pts).all(axis=1)]
+    if pts.shape[0] == 0:
+        return np.zeros((0, 3), dtype=float), np.zeros((0, 3), dtype=float)
+
+    vec = p.reshape(1, 3) - pts
+    dist = np.linalg.norm(vec, axis=1)
+    keep = dist > 1e-6
+    pts = pts[keep]
+    vec = vec[keep]
+    dist = dist[keep]
+    if pts.shape[0] == 0:
+        return np.zeros((0, 3), dtype=float), np.zeros((0, 3), dtype=float)
+
+    max_obstacles = int(max_obstacles)
+    if max_obstacles > 0 and pts.shape[0] > max_obstacles:
+        keep = np.argsort(dist)[:max_obstacles]
+        pts = pts[keep]
+        vec = vec[keep]
+        dist = dist[keep]
+
+    return vec / dist.reshape(-1, 1), pts
 
 def flatness_to_ctbr(
     a_ref_ned,
