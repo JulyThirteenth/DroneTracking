@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import math
 import sys
 from pathlib import Path
@@ -22,7 +21,7 @@ from depth_transform.depth_cfg import (
     SensorConfig,
     TransformConfig,
 )
-from depth_transform.depth_ops import depth_layer_scan
+from depth_transform.depth_ops import depth_layer_scan, depth_to_filtered_pointcloud
 
 
 def _image_to_depth_array(msg: Image) -> np.ndarray:
@@ -160,10 +159,17 @@ class Depth2ScanNode(Node):
         self._depth_count += 1
         try:
             depth = _image_to_depth_array(msg)
-            x_coord, y_coord, angles, dist = depth_layer_scan(
+            _, _, angles, dist = depth_layer_scan(
                 depth,
                 height=self._height,
                 cfg=self._cfg,
+            )
+            pts_cfg = self._cfg
+            pts_cfg.transform.filter_points = []
+            pts, _ = depth_to_filtered_pointcloud(
+                depth,
+                height=self._height,
+                cfg=pts_cfg,
             )
         except Exception as exc:
             self.get_logger().warn(f"Failed to convert depth image: {exc}")
@@ -177,16 +183,10 @@ class Depth2ScanNode(Node):
             )
         else:
             angles = self._scan_angles()
-        range_max = float(self._cfg.laserscan.default_value)
-        valid = np.isfinite(dist) & (dist > 0.0) & (dist < range_max)
-        x_coord = dist[valid] * np.cos(angles[valid])
-        y_coord = dist[valid] * np.sin(angles[valid])
 
-        stamp = self.get_clock().now().to_msg()
+        stamp = msg.header.stamp
         self._pub_scan.publish(self._to_laser_scan(stamp, frame_id, angles, dist))
-        self._pub_points.publish(
-            self._to_point_cloud(stamp, frame_id, x_coord, y_coord)
-        )
+        self._pub_points.publish(self._to_point_cloud(stamp, frame_id, pts))
         self._scan_count += 1
 
     def _scan_angles(self) -> np.ndarray:
@@ -230,24 +230,30 @@ class Depth2ScanNode(Node):
             scan.angle_increment = 0.0
         return scan
 
+    def _opengl_points_to_body(self, pts_cam):
+        pts_cam = np.asarray(pts_cam, dtype=np.float32).reshape(-1, 3)
+        x_cam = pts_cam[:, 0]
+        y_cam = pts_cam[:, 1]
+        z_cam = pts_cam[:, 2]
+
+        x_body = -z_cam
+        y_body = -x_cam
+        z_body = y_cam
+        return np.column_stack((x_body, y_body, z_body)).astype(np.float32)
+
     def _to_point_cloud(
         self,
         stamp,
         frame_id: str,
-        x_coord: np.ndarray,
-        y_coord: np.ndarray,
+        points: np.ndarray,
     ) -> PointCloud2:
-        points = np.column_stack(
-            [
-                np.asarray(x_coord, dtype=np.float32),
-                np.asarray(y_coord, dtype=np.float32),
-                np.zeros_like(x_coord, dtype=np.float32),
-            ]
-        )
+        points = self._opengl_points_to_body(points)
         header = Header()
         header.stamp = stamp
         header.frame_id = frame_id
-        return point_cloud2.create_cloud_xyz32(header, points.tolist())
+        return point_cloud2.create_cloud_xyz32(
+            header, points.astype(np.float32).tolist()
+        )
 
 
 def main() -> None:

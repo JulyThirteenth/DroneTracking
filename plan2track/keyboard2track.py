@@ -32,7 +32,12 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from tracking.tracking_cfg import DEFAULT_CONFIG
-from tracking.tracking_utils import ned_to_enu, wrap_pi, yaw_ned_to_enu
+from tracking.tracking_utils import (
+    ned_to_enu,
+    wrap_pi,
+    yaw_ned_to_enu,
+    quat_from_yaw_enu,
+)
 from fsm.fsm_ros import latched_qos
 from yamls.config import get_cfg
 
@@ -45,6 +50,15 @@ KEY_UP = "\x1b[A"
 KEY_DOWN = "\x1b[B"
 KEY_RIGHT = "\x1b[C"
 KEY_LEFT = "\x1b[D"
+
+
+def _yaw_enu_from_local_position(msg: VehicleLocalPosition) -> float:
+    """Extract yaw in ENU from PX4 VehicleLocalPosition."""
+    heading = getattr(msg, "heading", None)
+    yaw_ned = float(heading) if heading is not None else 0.0
+    if not (heading is not None and np.isfinite(yaw_ned)):
+        yaw_ned = 0.0
+    return float(yaw_ned_to_enu(wrap_pi(yaw_ned)))
 
 
 class KeyboardTerminal:
@@ -84,11 +98,11 @@ class Keyboard2TrackNode(Node):
         self._load_params()
 
         self._position_enu: np.ndarray | None = None
-        self._yaw_cmd_enu = float(self._cfg.plan2track.yaw.init)
+        self._heading_enu: float | None = None
+        self._yaw_cmd_enu: float | None = None
         self._speed = 0.0
         self._yaw_rate = 0.0
         self._fsm_state = ""
-        self._manual_yaw = False
         self._hover_position_enu: np.ndarray | None = None
         self._target_enu: np.ndarray | None = None
         self._terminal = KeyboardTerminal()
@@ -99,30 +113,31 @@ class Keyboard2TrackNode(Node):
         self._print_status()
 
     def _load_params(self) -> None:
+
+        def _param_float(name: str, default: float) -> float:
+            return float(self.declare_parameter(name, float(default)).value)
+
+        def _param_int(name: str, default: int) -> int:
+            return int(self.declare_parameter(name, int(default)).value)
+
         cfg = self._cfg
         mpc = DEFAULT_CONFIG.mpc
         yaw = DEFAULT_CONFIG.yaw
         control = DEFAULT_CONFIG.control
 
         self._frame_id = str(cfg.plan2track.path.frame_id)
-        self._dt = self._param_float("mpc_dt", mpc.dt)
-        self._horizon = self._param_int("horizon", mpc.horizon)
-        self._target_z = self._param_float("target_z", cfg.fsm.takeoff.height)
-        self._publish_dt = self._param_float("publish_dt", max(float(control.dt), 0.02))
-        self._linear_step = self._param_float("linear_step", 0.1)
-        self._yaw_rate_step = self._param_float("yaw_rate_step", 0.1)
-        self._linear_min = self._param_float("linear_min", 0.0)
-        self._linear_max = self._param_float("linear_max", mpc.v_ref)
-        self._yaw_rate_limit = self._param_float(
+        self._dt = _param_float("mpc_dt", mpc.dt)
+        self._horizon = _param_int("horizon", mpc.horizon)
+        self._target_z = _param_float("target_z", cfg.fsm.takeoff.height)
+        self._publish_dt = _param_float("publish_dt", max(float(control.dt), 0.02))
+        self._linear_step = _param_float("linear_step", 0.1)
+        self._yaw_rate_step = _param_float("yaw_rate_step", 0.1)
+        self._linear_min = _param_float("linear_min", 0.0)
+        self._linear_max = _param_float("linear_max", mpc.v_ref)
+        self._yaw_rate_limit = _param_float(
             "yaw_rate_limit",
             1.0 if yaw.yaw_rate_limit is None else yaw.yaw_rate_limit,
         )
-
-    def _param_float(self, name: str, default: float) -> float:
-        return float(self.declare_parameter(name, float(default)).value)
-
-    def _param_int(self, name: str, default: int) -> int:
-        return int(self.declare_parameter(name, int(default)).value)
 
     def _create_ros_io(self) -> None:
         cfg = self._cfg
@@ -154,6 +169,11 @@ class Keyboard2TrackNode(Node):
             self._param_str("velocity_topic", "/keyboard/velocity_cmd"),
             10,
         )
+        self._pub_pos = self.create_publisher(
+            PoseStamped,
+            _PROJECT_CFG.topics.tracking.vehicle_pose,
+            10,
+        )
 
     def _param_str(self, name: str, default: str) -> str:
         return str(self.declare_parameter(name, str(default)).value)
@@ -175,21 +195,25 @@ class Keyboard2TrackNode(Node):
 
     def _on_vehicle_state(self, msg: VehicleLocalPosition) -> None:
         self._position_enu = ned_to_enu([msg.x, msg.y, msg.z])
-        heading = float(getattr(msg, "heading", np.nan))
-        if np.isfinite(heading) and not self._manual_yaw:
-            self._yaw_cmd_enu = yaw_ned_to_enu(heading)
+        self._heading_enu = _yaw_enu_from_local_position(msg)
+        # if np.isfinite(self._heading_enu):
+        #     self._heading_enu = yaw_ned_to_enu(self._heading_enu)
+        self._publish_vehicle_pose()
 
     def _on_fsm_state(self, msg: String) -> None:
         self._fsm_state = str(msg.data).strip()
 
     def _tick(self) -> None:
         self._handle_keys(self._terminal.read())
-        self._update_yaw_cmd()
 
-        if not self._should_publish():
+        if not (self._fsm_state == STATE_TRACKING and self._position_enu is not None):
             return
 
-        direction = self._direction_enu()
+        self._update_yaw_cmd()
+        direction = np.array(
+            [np.cos(self._yaw_cmd_enu), np.sin(self._yaw_cmd_enu), 0.0],
+            dtype=float,
+        )
         start_enu = self._reference_start_enu()
         points = self._straight_ref_points(start_enu, direction)
         velocity_enu = direction * self._speed
@@ -198,12 +222,12 @@ class Keyboard2TrackNode(Node):
         self._print_status()
 
     def _update_yaw_cmd(self) -> None:
-        self._yaw_cmd_enu = wrap_pi(
-            self._yaw_cmd_enu + self._yaw_rate * self._publish_dt
-        )
-
-    def _should_publish(self) -> bool:
-        return self._fsm_state == STATE_TRACKING and self._position_enu is not None
+        curr_cmd_enu = 0.0
+        if self._yaw_cmd_enu is None:
+            curr_cmd_enu = self._heading_enu
+        else:
+            curr_cmd_enu = self._yaw_cmd_enu
+        self._yaw_cmd_enu = wrap_pi(curr_cmd_enu + self._yaw_rate * self._publish_dt)
 
     def _direction_enu(self) -> np.ndarray:
         return np.array(
@@ -252,7 +276,8 @@ class Keyboard2TrackNode(Node):
         if KEY_LEFT in keys:
             self._set_yaw_rate(self._yaw_rate - self._yaw_rate_step)
         if " " in keys:
-            self._stop()
+            self._set_speed(0.0)
+            self._set_yaw_rate(0.0)
         if "q" in keys:
             rclpy.shutdown()
             return
@@ -262,17 +287,15 @@ class Keyboard2TrackNode(Node):
         self._speed = float(np.clip(speed, self._linear_min, self._linear_max))
 
     def _set_yaw_rate(self, yaw_rate: float) -> None:
-        self._manual_yaw = True
         self._yaw_rate = float(
             np.clip(yaw_rate, -self._yaw_rate_limit, self._yaw_rate_limit)
         )
 
-    def _stop(self) -> None:
-        self._speed = 0.0
-        self._yaw_rate = 0.0
-
     def _print_status(self) -> None:
-        target = self._target_text()
+        if self._target_enu is None:
+            return "unknown"
+        x, y, z = np.asarray(self._target_enu, dtype=float).reshape(3)
+        target = f"({x:.2f}, {y:.2f}, {z:.2f})"
         print(
             f"\rkeyboard2track speed={self._speed:.2f} m/s, "
             f"yaw_rate={self._yaw_rate:.2f} rad/s, "
@@ -280,12 +303,6 @@ class Keyboard2TrackNode(Node):
             end="",
             flush=True,
         )
-
-    def _target_text(self) -> str:
-        if self._target_enu is None:
-            return "unknown"
-        x, y, z = np.asarray(self._target_enu, dtype=float).reshape(3)
-        return f"({x:.2f}, {y:.2f}, {z:.2f})"
 
     def _to_path(self, points_enu: np.ndarray) -> NavPath:
         msg = NavPath()
@@ -310,6 +327,20 @@ class Keyboard2TrackNode(Node):
         msg.twist.linear.z = float(velocity_enu[2])
         msg.twist.angular.z = float(self._yaw_rate)
         return msg
+
+    def _publish_vehicle_pose(self) -> None:
+        qx, qy, qz, qw = quat_from_yaw_enu(self._heading_enu)
+        msg = PoseStamped()
+        msg.header.frame_id = self._frame_id
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.pose.position.x = float(self._position_enu[0])
+        msg.pose.position.y = float(self._position_enu[1])
+        msg.pose.position.z = float(self._position_enu[2])
+        msg.pose.orientation.x = float(qx)
+        msg.pose.orientation.y = float(qy)
+        msg.pose.orientation.z = float(qz)
+        msg.pose.orientation.w = float(qw)
+        self._pub_pos.publish(msg)
 
 
 def main() -> None:
