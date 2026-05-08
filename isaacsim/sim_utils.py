@@ -1,13 +1,84 @@
 from pathlib import Path
+import random
 import sys
 import numpy as np
+from PIL import Image
+from scipy.ndimage import distance_transform_edt
 from scipy.spatial.transform import Rotation
+import yaml
 
 _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from tracking.tracking_utils import load_waypoints_ned, ned_to_enu
+
+
+def read_scene_list(path: Path) -> list[Path]:
+    if not path.exists():
+        raise FileNotFoundError(f"scene list not found: {path}")
+    out: list[Path] = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        scene_path = Path(line)
+        if not scene_path.is_absolute():
+            scene_path = path.parent / scene_path
+        out.append(scene_path.resolve())
+    return out
+
+
+def behavior1k_scene_name(scene_usd_path: Path) -> str:
+    return Path(scene_usd_path).parents[1].name
+
+
+def behavior1k_resource_root() -> Path:
+    return Path(__file__).resolve().parent.parent / "scenes" / "behavior1k"
+
+
+def discover_behavior1k_scene_files(root: Path) -> list[Path]:
+    scenes_file = root / "scenes.txt"
+    occ_dir = root / "occ_map"
+    return [
+        p
+        for p in read_scene_list(scenes_file)
+        if p.exists() and (occ_dir / f"{behavior1k_scene_name(p)}.yaml").exists()
+    ]
+
+
+def sample_behavior1k_spawn(
+    scene_usd_path: Path,
+    *,
+    clearance_m: float = 1.0,
+    seed: int = 10,
+) -> list[float]:
+    map_name = behavior1k_scene_name(scene_usd_path)
+    yaml_path = behavior1k_resource_root() / "occ_map" / f"{map_name}.yaml"
+    if not yaml_path.exists():
+        raise FileNotFoundError(f"behavior1k occupancy yaml not found: {yaml_path}")
+
+    cfg = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+    image_path = yaml_path.parent / str(cfg["image"])
+    occ_img = np.asarray(Image.open(image_path).convert("L"), dtype=np.uint8)
+
+    free = occ_img == 255
+    if not np.any(free):
+        raise RuntimeError(f"behavior1k occupancy map has no free cells: {image_path}")
+
+    resolution = float(cfg["resolution"])
+    candidates = np.argwhere(
+        distance_transform_edt(free) >= max(1.0, clearance_m / resolution)
+    )
+    if candidates.size == 0:
+        candidates = np.argwhere(free)
+
+    row, col = candidates[random.Random(seed).randrange(len(candidates))]
+    origin_x = float(cfg["origin"][0])
+    origin_y = float(cfg["origin"][1])
+    world_x = origin_x + int(col) * resolution
+    world_y = origin_y + (occ_img.shape[0] - 1 - int(row)) * resolution
+    return [float(world_x), float(world_y), 0.07]
 
 
 def _read_scene_rows(path: Path) -> list[list[str]]:
@@ -253,7 +324,6 @@ def generate_scene(
     stage,
     *,
     env_root: str = "/World/layout/PreEnv",
-    middle_wall_name: str = "MiddleWall",
     gate_root_name: str = "Gates",
     scene_file: Path | None = None,
 ):
@@ -270,10 +340,9 @@ def generate_scene(
     cuboid_specs, gate_specs = load_scene_specs(scene_path)
 
     for spec in cuboid_specs:
-        name = middle_wall_name if spec["name"] == "MiddleWall" else spec["name"]
         spawn_cuboid(
             stage,
-            f"{env_root}/{name}",
+            f"{env_root}/{spec['name']}",
             center=spec["center"],
             size=spec["size"],
             yaw_deg=spec["yaw_deg"],
@@ -305,8 +374,7 @@ def generate_scene(
 def generate_waypoint(
     stage,
     *,
-    task_path: Path | None = None,
-    waypoints_ned=None,
+    waypoints_ned,
     parent_path: str = "/World/layout/Waypoints",
     radius: float = 0.05,
     color=(0.0, 1.0, 0.0),
@@ -319,15 +387,8 @@ def generate_waypoint(
     in camera RGB/depth rendering. `stage` and `parent_path` are kept only for
     call-site compatibility.
 
-    Pass either:
-    - `task_path`: file path with NED waypoints (x y z per line)
-    - `waypoints_ned`: iterable of 3D points in NED
+    `waypoints_ned` is an iterable of NED points.
     """
-    if waypoints_ned is None:
-        if task_path is None:
-            raise ValueError("Either task_path or waypoints_ned must be provided")
-        waypoints_ned = load_waypoints_ned(Path(task_path))
-
     waypoints_ned = list(waypoints_ned)
     if not waypoints_ned:
         return 0

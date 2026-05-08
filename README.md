@@ -64,7 +64,7 @@ MicroXRCEAgent udp4 -p 8888
 ~/DroneSimulator/QGroundControl-x86_64.AppImage
 ```
 
-Task and scene selection:
+Waypoint and scene selection:
 
 ```bash
 isaac_run ./isaacsim/sim_single.py --list-tasks
@@ -124,7 +124,7 @@ The config loader is `yamls/config.py`.
 - `fsm`: FSM topics, logging, takeoff speed, and optional auto-land thresholds
 - `plan2track`: path topics, waypoint loading mode, loop mode, fixed yaw, and `init_yaw`
 - `tracking_ros`: PX4 ROS topics, target system, and `pub_offboard`
-- `tracking.tasks`: waypoint file selection
+- `tracking.tasks`: waypoint file selection under `plan2track/waypoints`
 - `tracking.mpc`: horizon, timestep, and reference speed
 - `tracking.control`: controller timer period
 - `tracking.yaw`: yaw gain and yaw-rate limit

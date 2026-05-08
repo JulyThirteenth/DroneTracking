@@ -26,6 +26,7 @@ P_QGC="$(tmux split-window -h -t "$P_AGENT" -P -F "#{pane_id}")"
 # 说明：用 bash -lc 确保 conda 函数可用，然后在里面 source 脚本并进入交互 shell
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ENV_SH="$SCRIPT_DIR/simdrone_env.sh"
+MTL_SH="$SCRIPT_DIR/export_mtl.sh"
 
 PROJECT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 
@@ -38,7 +39,7 @@ tmux send-keys -t "$P_TF_TREE" \
 
 # 4) 下方三个 pane 执行命令
 tmux send-keys -t "$P_ISAAC" \
-'isaac_run ~/DroneSimulator/PegasusSimulator/examples/DroneTracking/isaacsim/sim_single.py' C-m
+"cd \"$PROJECT_DIR\" && source \"$MTL_SH\" && isaac_run isaacsim/sim_single.py" C-m
 
 tmux send-keys -t "$P_AGENT" \
 'MicroXRCEAgent udp4 -p 8888' C-m

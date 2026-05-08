@@ -39,7 +39,7 @@ tracking_ros:
 
 tracking:
   tasks:
-    dir_name: tasks
+    dir_name: plan2track/waypoints
     waypoint_file: comp_waypoint_1.txt
   mpc:
     dt: 0.1

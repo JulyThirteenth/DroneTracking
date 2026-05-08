@@ -16,10 +16,10 @@ from yamls.config import get_cfg
 @dataclass(frozen=True)
 class TasksConfig:
     """
-    Task inputs (waypoints) live under `root/dir_name/`.
+    Tracking waypoint files live under `root/dir_name/`.
     """
 
-    dir_name: str = "tasks"
+    dir_name: str = "plan2track/waypoints"
     waypoint_file: str = "half8_waypoint.txt"
 
     def dir_path(self, *, root: Path) -> Path:

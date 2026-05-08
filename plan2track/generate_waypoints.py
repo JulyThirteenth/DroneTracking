@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Interactive minimum-snap waypoint tool.
+"""Interactive waypoint generator based on minimum-snap interpolation.
 
 Default mode opens an Open3D GUI editor. Use `--headless` for CLI generation.
 Inputs are specified in ENU coordinates. Saved waypoint files are written in NED
@@ -40,8 +40,10 @@ DEFAULT_WAYPOINTS_ENU = np.array(
 )
 DEFAULT_SEGMENT_TIMES = np.full(DEFAULT_WAYPOINTS_ENU.shape[0] - 1, 10.0, dtype=float)
 DEFAULT_RESOLUTION_M = 0.1
-DEFAULT_OUTPUT = _ROOT / "tasks" / "demo_waypoint_1.txt"
-DEFAULT_TASK_OUTPUT = _THIS_DIR / "demo_task_1_convert.txt"
+DEFAULT_TASKS_DIR = _THIS_DIR / "tasks"
+DEFAULT_WAYPOINTS_DIR = _THIS_DIR / "waypoints"
+DEFAULT_OUTPUT = DEFAULT_WAYPOINTS_DIR / "demo_waypoint_1.txt"
+DEFAULT_TASK_OUTPUT = DEFAULT_TASKS_DIR / "demo_task_1_convert.txt"
 DEFAULT_SCENE_FILE: Path | None = _ROOT / "scenes"
 
 
