@@ -1,8 +1,7 @@
 """Shared FSM specification (states, events, aliases, transitions)."""
 
 from __future__ import annotations
-
-from fsm_core import Transition
+from .fsm_core import Transition
 
 DEFAULT_CMD_TOPIC = "/fsm/cmd"
 DEFAULT_STATE_TOPIC = "/fsm/state"

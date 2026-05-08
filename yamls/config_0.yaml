@@ -1,5 +1,5 @@
 runtime:
-  controller: mpc
+  controller: mpcc
   solver: osqp
 
 fsm:
@@ -80,5 +80,5 @@ tracking:
     q_lag: 2.0
     q_progress: 1.0
     q_terminal_s: 10.0
-    vs_max: 1.0
+    vs_max: 2.0
     vs_min: 0.0

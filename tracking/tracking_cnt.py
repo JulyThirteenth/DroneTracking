@@ -6,7 +6,7 @@ CTBR tracking controller using MPC/MPCC:
 - `tracking_osqp.MPCOSQP` with optional HOCBF obstacle constraints
 
 This module intentionally contains no ROS node; the drone racing example uses the
-FSM node (`examples/DroneTracking/fsm/fsm_node.py`) for orchestration and PX4
+FSM node (`examples/DroneTracking/fsm_new/fsm_node.py`) for orchestration and PX4
 offboard publishing.
 """
 

@@ -118,8 +118,8 @@ cd ${Path2Project}/DroneTracking
 `run_code.sh` starts:
 
 - `python plan2track/plan2track.py`
-- `python fsm/fsm_node.py`
-- `python fsm/fsm_app.py`
+- `python -m fsm.fsm_main`
+- `python -m fsm.fsm_interface`
 
 `run_oa_code.sh` starts the same controller panes and additionally starts:
 
@@ -133,8 +133,8 @@ source ./tools/simdrone_env.sh
 export DRONE_TRACKING_CONFIG=config_0.yaml
 
 python plan2track/plan2track.py
-python fsm/fsm_node.py
-python fsm/fsm_app.py
+python -m fsm.fsm_main
+python -m fsm.fsm_interface
 python perception/depth2scan.py --ros-args \
   -p depth_topic:=/depth \
   -p scan_topic:=/depth2scan/scan \
@@ -145,7 +145,7 @@ python perception/depth2scan.py --ros-args \
 
 ## FSM Commands
 
-Use `fsm/fsm_app.py` for interactive commands:
+Use `python -m fsm.fsm_interface` for interactive commands:
 
 - `prepare`
 - `takeoff`
@@ -265,8 +265,9 @@ Relevant YAML sections:
 - `tracking/tracking_cnt.py`: controller step, CTBR conversion, and yaw-rate logic
 - `tracking/tracking_osqp.py`: OSQP MPC/HOCBF solver implementation
 - `tracking/tracking_ros.py`: PX4 ROS message bridge
+- `fsm/fsm_main.py`: FSM node startup
 - `fsm/fsm_node.py`: FSM ROS node and transition coordinator
-- `fsm/behaviors.py`: per-state behavior and tracker command publication
-- `fsm/fsm_app.py`: interactive FSM terminal
+- `fsm/fsm_mpc.py`: MPC/MPCC behavior and tracker command publication
+- `fsm/fsm_interface.py`: interactive FSM terminal
 - `yamls/config.py`: YAML config loader
 - `yamls/*.yaml`: runtime configs
