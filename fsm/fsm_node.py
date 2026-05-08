@@ -16,7 +16,7 @@ from .fsm_ros import (
     path_msg_points_enu,
     scan_msg_points_enu,
     vehicle_state_from_local_position,
-    TOPIC_VEHICLE_LOCAL_POSITION
+    TOPIC_VEHICLE_LOCAL_POSITION,
 )
 from .fsm_spec import (
     CMD_TO_EVENT,
@@ -88,7 +88,9 @@ class DroneFSMNode(FSMNodeBase):
         )
         self.create_subscription(NavPath, tracking_topic, self._on_tracking_path, 10)
         self.get_logger().info(f"Subscribed tracking path: {tracking_topic}")
-        self.get_logger().info(f"Subscribed yaw_cmd: {_CFG.topics.planning.yaw_cmd_enu}")
+        self.get_logger().info(
+            f"Subscribed yaw_cmd: {_CFG.topics.planning.yaw_cmd_enu}"
+        )
 
         hocbf = self._tracking_cfg.hocbf
         self._use_depth_obstacles = self._controller == _MPC and bool(hocbf.enabled)
