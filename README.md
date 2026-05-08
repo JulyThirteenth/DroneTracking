@@ -180,10 +180,9 @@ python plan2track/generate_waypoints.py
 The selected waypoint file is configured by:
 
 ```yaml
-tracking:
-  tasks:
-    dir_name: plan2track/waypoints
-    waypoint_file: line_waypoint.txt
+plan2track:
+  path:
+    file: plan2track/waypoints/line_waypoint.txt
 ```
 
 ## Perception
@@ -232,8 +231,7 @@ Relevant YAML sections:
 - `topics`: FSM, planning, tracking, PX4, and perception ROS topics
 - `vehicle`: PX4 target system and offboard publication switch
 - `fsm`: FSM logging, takeoff, and auto-land behavior parameters
-- `plan2track`: waypoint loading mode, loop mode, fixed yaw, and initial yaw
-- `tracking.tasks`: waypoint file selection under `plan2track/waypoints`
+- `plan2track`: waypoint file, loading mode, loop mode, fixed yaw, and initial yaw
 - `tracking.mpc`: horizon, timestep, and reference speed
 - `tracking.mpc.cost`: MPC cost weights
 - `tracking.mpcc`: MPCC cost weights and progress limits

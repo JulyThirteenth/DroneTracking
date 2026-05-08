@@ -9,7 +9,7 @@ from rclpy.executors import ExternalShutdownException
 
 from .fsm_log import FSMLogger
 from .fsm_mpc import MPCBehavior, MPCCBehavior
-from tracking.tracking_cnt import PathTrackerCtbr
+from tracking.tracking_cnt import MPCTrackerCtbr, MPCCTrackerCtbr
 
 _DEFAULT_LOG_DIR = Path(__file__).resolve().parent/ "log"
 
@@ -145,9 +145,8 @@ def behavior_creater(
         takeoff_height=takeoff_height,
         behavior_name=f"{behavior_cls.__name__}",
     )
-    tracker = PathTrackerCtbr(
-        None, cfg=cfg, controller=str(controller), solver=str(solver)
-    )
+    tracker_cls = MPCCTrackerCtbr if controller_name == "mpcc" else MPCTrackerCtbr
+    tracker = tracker_cls(cfg=cfg, solver=str(solver))
     kwargs = {
         "node": node,
         "logger": logger,

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import numpy as np
 from rclpy.node import Node
 from .fsm_ros import Px4Bridge
-from tracking.tracking_cnt import PathTrackerCtbr
+from tracking.tracking_cnt import TrackerCtbrBase
 
 
 @dataclass
@@ -58,7 +58,7 @@ class FSMBehaviorBase(ABC):
         *,
         node: Node,
         logger: FSMLoggerBase,
-        tracker: PathTrackerCtbr,
+        tracker: TrackerCtbrBase,
     ):
         self._node = node
         self._logger = logger

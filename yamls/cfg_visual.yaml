@@ -41,7 +41,7 @@ fsm:
 
 plan2track:
   path:
-    file: ""
+    file: plan2track/waypoints/comp_waypoint_3.txt
     origin_mode: fixed
     frame_id: map
     loop: false
@@ -50,9 +50,6 @@ plan2track:
     init: 0.0
 
 tracking:
-  tasks:
-    dir_name: plan2track/waypoints
-    waypoint_file: comp_waypoint_3.txt
   control_loop:
     dt: 0.01
   mpc:

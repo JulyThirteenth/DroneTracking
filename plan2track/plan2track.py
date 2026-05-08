@@ -275,7 +275,6 @@ def _yaw_enu_from_local_position(msg: VehicleLocalPosition) -> float:
 def _resolve_path_file(
     *,
     io_cfg: Plan2TrackConfig,
-    tracking_cfg: TrackingConfig,
     override: str | Path | None,
 ) -> Path:
     if override is not None:
@@ -283,9 +282,10 @@ def _resolve_path_file(
 
     cfg_path_file = str(io_cfg.path.file).strip()
     if cfg_path_file:
-        return Path(cfg_path_file)
+        path = Path(cfg_path_file)
+        return path if path.is_absolute() else _PROJECT_ROOT / path
 
-    return tracking_cfg.tasks.waypoint_path(root=_PROJECT_ROOT)
+    return _PROJECT_ROOT / "plan2track/waypoints/half8_waypoint.txt"
 
 
 class Plan2TrackNode(Node):
@@ -305,7 +305,6 @@ class Plan2TrackNode(Node):
         self._origin_mode = str(self._io_cfg.path.origin_mode).lower().strip()
         self._path_file = _resolve_path_file(
             io_cfg=self._io_cfg,
-            tracking_cfg=self._tracking_cfg,
             override=path_file,
         )
 

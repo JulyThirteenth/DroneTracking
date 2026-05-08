@@ -14,22 +14,6 @@ from yamls.config import get_cfg
 
 
 @dataclass(frozen=True)
-class TasksConfig:
-    """
-    Tracking waypoint files live under `root/dir_name/`.
-    """
-
-    dir_name: str = "plan2track/waypoints"
-    waypoint_file: str = "half8_waypoint.txt"
-
-    def dir_path(self, *, root: Path) -> Path:
-        return root / self.dir_name
-
-    def waypoint_path(self, *, root: Path) -> Path:
-        return self.dir_path(root=root) / self.waypoint_file
-
-
-@dataclass(frozen=True)
 class MpcConfig:
     dt: float = 0.1
     horizon: int = 15
@@ -119,7 +103,6 @@ class TrackingConfig:
     default_controller: str = "mpc"
     default_solver: str = "ipopt"
 
-    tasks: TasksConfig = field(default_factory=TasksConfig)
     mpc: MpcConfig = field(default_factory=MpcConfig)
     control: ControlLoopConfig = field(default_factory=ControlLoopConfig)
     yaw: YawControlConfig = field(default_factory=YawControlConfig)
@@ -152,7 +135,6 @@ def _load_default_config() -> TrackingConfig:
     return TrackingConfig(
         default_controller=str(merged["default_controller"]),
         default_solver=str(merged["default_solver"]),
-        tasks=TasksConfig(**merged["tasks"]),
         mpc=MpcConfig(**merged["mpc"]),
         control=ControlLoopConfig(**merged["control"]),
         yaw=YawControlConfig(**merged["yaw"]),

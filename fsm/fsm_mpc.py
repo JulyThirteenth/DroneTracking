@@ -13,7 +13,7 @@ from .fsm_spec import (
     EVENT_TAKEOFF,
     EVENT_LAND,
 )
-from tracking.tracking_cnt import PathTrackerCtbr
+from tracking.tracking_cnt import MPCTrackerCtbr, MPCCTrackerCtbr
 
 
 class MPCBehaviorBase(FSMBehaviorBase):
@@ -114,7 +114,7 @@ class MPCBehavior(MPCBehaviorBase):
         *,
         node: Node,
         logger: FSMLoggerBase,
-        tracker: PathTrackerCtbr,
+        tracker: MPCTrackerCtbr,
         takeoff_height: float = 1.0,
         takeoff_velocity: float = 0.5,
     ):
@@ -125,7 +125,7 @@ class MPCBehavior(MPCBehaviorBase):
         )
         self._takeoff_height = takeoff_height
         self._takeoff_velocity = takeoff_velocity
-        self._tracking_dt = self._tracker.dt
+        self._tracking_dt = self._tracker.mpc_dt
         self._tracking_horizon = self._tracker.horizon
 
     def update_ref_cmd_enu(self, ref_cmd_enu: np.ndarray):
@@ -183,10 +183,8 @@ class MPCBehavior(MPCBehaviorBase):
             self._vehicle_state.velocity_enu,
             self._vehicle_state.accel_enu,
             self._vehicle_state.yaw_enu,
-            float(dt),
             yaw_cmd_enu=self._yaw_cmd_enu,
             ref_traj_enu=ref_cmd_enu,
-            path_points_enu=None,
             obstacle_points_enu=obstacle_points,
             log_solver=False,
         )
@@ -225,7 +223,7 @@ class MPCCBehavior(MPCBehaviorBase):
         *,
         node: Node,
         logger: FSMLoggerBase,
-        tracker: PathTrackerCtbr,
+        tracker: MPCCTrackerCtbr,
         takeoff_height: float = 1.0,
     ):
         super().__init__(node=node, logger=logger, tracker=tracker)
@@ -266,11 +264,8 @@ class MPCCBehavior(MPCBehaviorBase):
             self._vehicle_state.velocity_enu,
             self._vehicle_state.accel_enu,
             self._vehicle_state.yaw_enu,
-            float(dt),
             yaw_cmd_enu=self._yaw_cmd_enu,
-            ref_traj_enu=None,
             path_points_enu=ref_cmd_enu,
-            obstacle_points_enu=obstacle_points,
             log_solver=False,
         )
 

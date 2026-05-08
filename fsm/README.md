@@ -46,7 +46,7 @@ Controller 负责根据 behavior 提供的输入计算具体控制量：
 - MPCC：基于路径点和进度变量计算控制指令。
 - 输出 body rate 和 thrust 等低层控制量。
 
-Controller 实现在 `tracking` 模块中，FSM 侧通过 `tracking.tracking_cnt.PathTrackerCtbr` 调用。
+Controller 实现在 `tracking` 模块中，FSM 侧通过 `tracking.tracking_cnt.MPCTrackerCtbr` / `MPCCTrackerCtbr` 调用。
 
 ### 4. Px4Bridge
 
