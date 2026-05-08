@@ -3,7 +3,7 @@ import numpy as np
 from dataclasses import dataclass
 import datetime
 
-from tracking_utils import Polyline3D, coerce_path_points_3d
+from tracking.tracking_utils import Polyline3D, coerce_path_points_3d
 
 
 class Dynamics:

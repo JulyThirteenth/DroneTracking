@@ -65,10 +65,10 @@ class FsmConfig:
     log_dir: str
     log_enabled: bool
     log_flush_every: int
-    takeoff_speed_mps: float
+    takeoff_velocity: float
     auto_land: bool
-    auto_land_distance_m: float
-    auto_land_speed_mps: float
+    auto_land_distance: float
+    auto_land_velocity: float
     auto_land_hold_cycles: int
 
 
@@ -119,10 +119,10 @@ _FSM_DEFAULTS = {
     "log_dir": "",
     "log_enabled": True,
     "log_flush_every": 1,
-    "takeoff_speed_mps": 0.67,
+    "takeoff_velocity": 0.67,
     "auto_land": False,
-    "auto_land_distance_m": 0.1,
-    "auto_land_speed_mps": 0.1,
+    "auto_land_distance": 0.1,
+    "auto_land_velocity": 0.1,
     "auto_land_hold_cycles": 20,
 }
 _PLAN2TRACK_DEFAULTS = {

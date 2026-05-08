@@ -14,13 +14,13 @@ from __future__ import annotations
 
 import numpy as np
 
-from tracking_cfg import (
+from tracking.tracking_cfg import (
     DEFAULT_CONFIG,
     TrackingConfig,
     make_mpc_params,
     make_mpcc_params,
 )
-from tracking_utils import (
+from tracking.tracking_utils import (
     as_vec3,
     enu_to_ned,
     flatness_to_ctbr,
@@ -67,7 +67,7 @@ class PathTrackerCtbr:
 
         if self.controller == "mpc":
             if self.solver in {"osqp"}:
-                from tracking_osqp import HOCBFConfig, MPCOSQP
+                from tracking.tracking_osqp import HOCBFConfig, MPCOSQP
 
                 cbf = None
                 if bool(cfg.hocbf.enabled):
@@ -81,16 +81,16 @@ class PathTrackerCtbr:
             else:
                 if bool(cfg.hocbf.enabled):
                     raise ValueError("HOCBF obstacle avoidance requires solver 'osqp'.")
-                from tracking_opt import MPC
+                from tracking.tracking_opt import MPC
 
                 self._opt = MPC(params)
         else:
             if self.solver in {"osqp"}:
-                from tracking_osqp import MPCCOSQP
+                from tracking.tracking_osqp import MPCCOSQP
 
                 self._opt = MPCCOSQP(params_mpcc)
             else:
-                from tracking_opt import MPCC
+                from tracking.tracking_opt import MPCC
 
                 self._opt = MPCC(params_mpcc)
         self._opt.setup()
@@ -161,7 +161,7 @@ class PathTrackerCtbr:
                 obstacle_normals = None
                 obstacle_points = None
                 if obstacle_points_enu is not None:
-                    from tracking_osqp import obstacle_points_to_planes
+                    from tracking.tracking_osqp import obstacle_points_to_planes
 
                     obstacle_points = np.asarray(obstacle_points_enu, dtype=float)
                     obstacle_normals, obstacle_points = obstacle_points_to_planes(

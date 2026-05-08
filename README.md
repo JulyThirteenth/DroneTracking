@@ -1,4 +1,4 @@
-# drone_racing
+# DroneTracking
 
 Current workflow for Pegasus Simulator 5.1, PX4 1.16, ROS 2 Humble, and the `mpcc` conda environment.
 

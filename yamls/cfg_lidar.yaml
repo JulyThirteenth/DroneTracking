@@ -10,10 +10,10 @@ fsm:
   log_dir: ""
   log_enabled: true
   log_flush_every: 1
-  takeoff_speed_mps: 0.4
+  takeoff_velocity: 0.4
   auto_land: true
-  auto_land_distance_m: 0.1
-  auto_land_speed_mps: 0.1
+  auto_land_distance: 0.1
+  auto_land_velocity: 0.1
   auto_land_hold_cycles: 20
 
 plan2track:

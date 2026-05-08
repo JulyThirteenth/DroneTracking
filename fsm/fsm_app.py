@@ -22,7 +22,6 @@ from pathlib import Path
 import rclpy
 from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -34,25 +33,10 @@ from fsm_spec import (
     EVENT_ALIASES,
     TRANSITION_SPECS,
 )
+from fsm_ros import derive_info_topic, latched_qos
+
 from yamls.config import get_cfg
-
 _CFG = get_cfg()
-
-
-_STATE_QOS = QoSProfile(
-    reliability=ReliabilityPolicy.RELIABLE,
-    durability=DurabilityPolicy.TRANSIENT_LOCAL,
-    history=HistoryPolicy.KEEP_LAST,
-    depth=1,
-)
-
-
-def _derive_info_topic(state_topic: str) -> str:
-    topic = str(state_topic).strip()
-    if topic.endswith("/state"):
-        return f"{topic[:-6]}/info"
-    return f"{topic}/info"
-
 
 @dataclass(frozen=True)
 class _CommandHelp:
@@ -74,11 +58,11 @@ class FsmTerminalApp(Node):
         super().__init__("fsm_terminal_app")
         self._cmd_topic = str(cmd_topic)
         self._state_topic = str(state_topic)
-        self._info_topic = _derive_info_topic(self._state_topic)
+        self._info_topic = derive_info_topic(self._state_topic)
 
         self._pub_cmd = self.create_publisher(String, self._cmd_topic, 10)
-        self.create_subscription(String, self._state_topic, self._on_state, _STATE_QOS)
-        self.create_subscription(String, self._info_topic, self._on_info, 10)
+        self.create_subscription(String, self._state_topic, self._on_state, latched_qos(depth=1))
+        self.create_subscription(String, self._info_topic, self._on_info, latched_qos(depth=10))
 
         self._transitions = tuple(TRANSITION_SPECS)
         self._state_lock = threading.Lock()

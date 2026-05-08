@@ -215,7 +215,7 @@ def make_mpc_params(cfg: TrackingConfig, *, with_dynamics: bool) -> MPCParamsCfg
     dyn = None
     if with_dynamics:
         # Imported lazily so `--solver osqp` does not require casadi.
-        from tracking_opt import Dynamics
+        from tracking.tracking_opt import Dynamics
 
         dyn = Dynamics("uav")
 
