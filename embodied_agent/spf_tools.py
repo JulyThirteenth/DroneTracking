@@ -72,8 +72,12 @@ def get_current_position_and_rotation():
     if _control is None:
         raise Exception("Error: Environment controller is not initialized. Call init_env() first.")
     state = _control.get_agent_state()
-    return f"Current state: {state}"
-
+    pos = state["position"]
+    rot = state["rotation"]
+    return (
+        f"Current state: position(x={pos['x']:.3f}, y={pos['y']:.3f}, z={pos['z']:.3f}), "
+        f"rotation(x={rot['x']:.3f}, y={rot['y']:.3f}, z={rot['z']:.3f})"
+    )
 
 class GetTargetInput(BaseModel):
     instruction: str = Field(description="Description of the target object to locate.")
@@ -120,8 +124,8 @@ def get_target_object(instruction: str):
     yaw_rad = math.radians(rot["y"])
 
     world_x = pos["x"] + (sx * math.cos(yaw_rad) + sy * math.sin(yaw_rad))
-    world_z = pos["z"] + (-sx * math.sin(yaw_rad) + sy * math.cos(yaw_rad))
-    world_y = pos["y"] + sz
+    world_y = pos["y"] + (-sx * math.sin(yaw_rad) + sy * math.cos(yaw_rad))
+    world_z = pos["z"] + sz  
 
     return (
         f"Target '{instruction}' found at world coordinates: "
@@ -131,50 +135,53 @@ def get_target_object(instruction: str):
 
 
 class NavigateInput(BaseModel):
-    x: float = Field(description="The x-coordinate of the target position in the world space.")
-    z: float = Field(description="The z-coordinate of the target position in the world space.")
+    x: float = Field(description="Target East coordinate (ENU x).")
+    y: float = Field(description="Target North coordinate (ENU y).")
+    z: float = Field(description="Target Up coordinate (ENU z, altitude).")
 
 
 @tool(args_schema=NavigateInput)
-def navigate_to_point(x: float, z: float) -> str:
+def navigate_to_point(x: float, y: float, z: float) -> str:
     """
-    Move the agent to (x, z).
+    Move the agent to (x, y, z).
     """
     if _control is None:
         raise Exception("Error: Environment controller is not initialized. Call init_env() first.")
 
     start_state = _control.get_agent_state()
     start_x = start_state["position"]["x"]
+    start_y = start_state["position"]["y"]
     start_z = start_state["position"]["z"]
     start_yaw = start_state["rotation"]["y"]
 
     dx = x - start_x
-    dz = z - start_z
-    if math.sqrt(dx**2 + dz**2) > 0.1:
-        target_yaw = math.degrees(math.atan2(dx, dz)) % 360
+    dy = y - start_y
+    if math.sqrt(dx**2 + dy**2) > 0.1:
+        target_yaw = math.degrees(math.atan2(dx, dy)) % 360
     else:
         target_yaw = start_yaw
 
     target_yaw = round(target_yaw / 30) * 30 % 360
 
-    target: NavTarget = {"x": x, "z": z, "yaw": target_yaw}
+    target: NavTarget = {"x": x, "z": z,"y": y, "yaw": target_yaw}
     result = _control.navigate_to_point(target)
 
     end_state = _control.get_agent_state()
     end_x = end_state["position"]["x"]
+    end_y = end_state["position"]["y"]
     end_z = end_state["position"]["z"]
     end_yaw = end_state["rotation"]["y"]
 
     if result["success"]:
         return (
             f"Navigation successful. Perspective shifted: "
-            f"From A(x={start_x:.2f}, z={start_z:.2f}, yaw={start_yaw:.2f}°) "
-            f"To B(x={end_x:.2f}, z={end_z:.2f}, yaw={end_yaw:.2f}°)."
+            f"From A(x={start_x:.2f}, y={start_y:.2f}, z={start_z:.2f}, yaw={start_yaw:.2f}°) "
+            f"To B(x={end_x:.2f}, y={end_y:.2f}, z={end_z:.2f}, yaw={end_yaw:.2f}°)."
         )
     else:
         return (
             f"Navigation failed. Current position: "
-            f"(x={end_x:.2f}, z={end_z:.2f}, yaw={end_yaw:.2f}°)."
+            f"(x={end_x:.2f}, y={end_y:.2f}, z={end_z:.2f}, yaw={end_yaw:.2f}°)."
         )
 
 
@@ -193,10 +200,17 @@ def rotate(yaw: float) -> str:
     target_yaw = round(yaw / 30) * 30 % 360
 
     start_state = _control.get_agent_state()
-    curr_x, curr_z = start_state["position"]["x"], start_state["position"]["z"]
+    curr_x = start_state["position"]["x"]
+    curr_y = start_state["position"]["y"]
+    curr_z = start_state["position"]["z"]
     start_yaw = start_state["rotation"]["y"]
 
-    result = _control.navigate_to_point({"x": curr_x, "z": curr_z, "yaw": target_yaw})
+    result = _control.navigate_to_point({
+        "x": curr_x,
+        "y": curr_y,
+        "z": curr_z,
+        "yaw": target_yaw}
+    )
 
     end_state = _control.get_agent_state()
     end_yaw = end_state["rotation"]["y"]

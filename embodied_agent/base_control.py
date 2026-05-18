@@ -1,7 +1,6 @@
 from abc import ABC, abstractmethod
 from PIL import Image
 from typing import TypedDict
-from typing_extensions import NotRequired
 
 from .spf_geometry import SPFGeometry
 
@@ -13,10 +12,10 @@ class Point3D(TypedDict):
 
 
 class NavTarget(TypedDict):
-    x: float
-    z: float
-    y: NotRequired[float | None]
-    yaw: NotRequired[float | None]
+    x: float # EAST
+    y: float # NORTH
+    z: float # UP
+    yaw: float # Yaw in degree
 
 
 class NavResult(TypedDict):

@@ -23,11 +23,11 @@ class SPFGeometry:
 
     def reverse_project_point(self, pixel_x: float, pixel_y: float, d_adj: float):
         """
-        Returns: (s_x, s_y, s_z)
+        Returns: (s_x, s_y, s_z) in camera frame
 
-            \n s_x = x_norm * d_adj * tan(hfov_rad)
-            \n s_y = d_adj
-            \n s_z = y_norm * d_adj * tan(vfov_rad)
+            \n s_x = horizontal offset (left-right)
+            \n s_y = forward depth
+            \n s_z = vertical offset (up-down)
         """
         center_x = self.width / 2
         center_y = self.height / 2
