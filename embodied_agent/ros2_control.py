@@ -25,6 +25,23 @@ from yamls.config import get_cfg
 _CFG = get_cfg()
 
 STALE_THRESHOLD = 0.5
+NAV_GOAL_TOPIC = "/agent/nav/goal" # 发布
+NAV_RESULT_TOPIC = "/agent/nav/result" # 接收
+NAV_TIMEOUT = 30.0
+
+def yaw_to_quaternion(yaw_deg: float) -> dict:
+    yaw_rad = math.radians(yaw_deg)
+    return {
+        "x": 0.0,
+        "y": 0.0,
+        "z": math.sin(yaw_rad / 2.0),
+        "w": math.cos(yaw_rad / 2.0),
+    }
+
+def quaternion_to_yaw(q) -> float:
+    siny_cosp = 2.0 * (q.w * q.z)
+    cosy_cosp = 1.0 - 2.0 * (q.z * q.z)
+    return math.atan2(siny_cosp, cosy_cosp)
 
 class ROS2Control(BaseControl):
     def __init__(self, spf_geometry):
@@ -74,16 +91,16 @@ class ROS2Control(BaseControl):
         )
 
         # 发布导航指令
-        self._pub_ref_path = self.node.create_publisher(
-            NavPath,
-            str(_CFG.plan2track.ref_path_topic),
-            10,
+        self._pub_nav_goal = self.node.create_publisher(
+            PoseStamped, NAV_GOAL_TOPIC, 10
         )
-        self._pub_yaw_cmd = self.node.create_publisher(
-            Float32,
-            str(_CFG.plan2track.yaw_cmd_topic),
-            10,
+        self._sub_nav_result = self.node.create_subscription(
+            PoseStamped, NAV_RESULT_TOPIC,
+            self._on_navigation_result, 10
         )
+        self._nav_lock = threading.Lock()
+        self._nav_event = threading.Event()
+        self._nav_result: NavResult | None = None
     
     def _ros_spin(self):
         """后台轮询线程"""
@@ -116,7 +133,7 @@ class ROS2Control(BaseControl):
             self._position_enu = ned_to_enu(np.array(pos_ned, dtype=float))
             self._yaw_enu = yaw_ned_to_enu(wrap_pi(yaw_ned))
 
-            # 缓存速度
+            # 缓存速度（暂时没用）
             vel_ned = (
                 getattr(msg, "vx", float("nan")),
                 getattr(msg, "vy", float("nan")),
@@ -125,6 +142,60 @@ class ROS2Control(BaseControl):
             if is_finite_vec3(vel_ned):
                 self._velocity_enu = ned_to_enu(np.array(vel_ned, dtype=float))
             self._last_position_time = time.time()
+
+    def navigate_to_point(self, target: NavTarget) -> NavResult:
+        goal = PoseStamped()
+        goal.header.frame_id = str(_CFG.plan2track.frame_id)
+        goal.header.stamp = self.node.get_clock().now().to_msg()
+        goal.pose.position.x = float(target["x"])
+        goal.pose.position.y = float(target["y"])
+        goal.pose.position.z = float(target["z"])
+
+        q = yaw_to_quaternion(float(target["yaw"]))
+        goal.pose.orientation.x = q["x"]
+        goal.pose.orientation.y = q["y"]
+        goal.pose.orientation.z = q["z"]
+        goal.pose.orientation.w = q["w"]
+
+        with self._nav_lock:
+            self._nav_event.clear()
+            self._nav_result = None
+        
+        self._pub_nav_goal.publish(goal)
+        print(f"[ROS2Control] 导航指令已发布 → ({target['x']:.2f}, {target['y']:.2f}, {target['z']:.2f}), yaw={target['yaw']:.1f}°")
+        
+        if self._nav_event.wait(timeout=NAV_TIMEOUT):
+            with self._nav_lock:
+                assert self._nav_result is not None
+                return self._nav_result
+
+        print(f"[ROS2Control] 导航超时（{NAV_TIMEOUT}s）")
+        return {"success": False, "position": None}
+
+    def _on_navigation_result(self, msg: PoseStamped):
+        with self._nav_lock:
+            pos = msg.pose.position
+            q = msg.pose.orientation
+
+            # 检查是否失败
+            # 位置(0,0,0) && w = 1 为失败
+            is_failure = (
+                abs(pos.x) < 1e-6 and abs(pos.y) < 1e-6 and abs(pos.z) < 1e-6
+                and abs(q.x) < 1e-6 and abs(q.y) < 1e-6
+                and abs(q.z) < 1e-6 and abs(q.w - 1.0) < 1e-6
+            )
+
+            if is_failure:
+                self._nav_result = {"success": False, "position": None}
+                print("[ROS2Control] 收到导航结果：失败")
+            else:
+                self._nav_result = {
+                    "success": True,
+                    "position": {"x": float(pos.x), "y": float(pos.y), "z": float(pos.z)},
+                }
+                print(f"[ROS2Control] 收到导航结果：成功 → ({pos.x:.2f}, {pos.y:.2f}, {pos.z:.2f})")
+
+            self._nav_event.set()
 
     def get_current_view(self) -> Image.Image:
         """从内存中获取最新的 OpenCV 帧，并翻译为 PIL Image 返回"""
@@ -162,135 +233,6 @@ class ROS2Control(BaseControl):
             "position": {"x": float(pos[0]), "y": float(pos[1]), "z": float(pos[2])},
             "rotation": {"x": 0.0, "y": yaw_deg, "z": 0.0}
         }
-
-    def navigate_to_point(self, target: NavTarget) -> NavResult:
-        """
-        发布 MPC 参考轨迹，由 FSM 在 TRACKING 状态下消费执行。
-        """
-        state = self.get_agent_state()
-        current_enu = np.array([
-            state["position"]["x"],
-            state["position"]["y"],
-            state["position"]["z"],
-        ], dtype=float)
-        current_yaw_deg = state["rotation"]["y"]
-
-        target_x = float(target["x"])
-        target_y = float(target["y"])
-        target_z = float(target["z"])
-        target_enu = np.array([target_x, target_y, target_z], dtype=float)
-
-        target_yaw_deg = float(target["yaw"])
-        target_yaw_rad = math.radians(target_yaw_deg)
-
-        horizon = int(_CFG.tracking["mpc"]["horizon"])
-        pos_threshold = 0.2
-        yaw_threshold_deg = 5.0
-        timeout = 30.0
-
-        # ===== STAGE 1: 移动 =====
-        progress = np.linspace(0.0, 1.0, horizon + 1, dtype=float)
-        delta = (target_enu - current_enu).reshape(3, 1)
-        ref_traj_enu = current_enu.reshape(3, 1) + delta * progress.reshape(1, -1)
-
-        current_yaw_rad = math.radians(current_yaw_deg)
-        yaw_msg = Float32()
-        yaw_msg.data = float(current_yaw_rad)
-
-        start_time = time.time()
-        while True:
-            elapsed = time.time() - start_time
-            if elapsed > timeout:
-                final_state = self.get_agent_state()
-                final_pos = final_state["position"]
-                return {
-                    "success": False,
-                    "position": {"x": final_pos["x"], "y": final_pos["y"], "z": final_pos["z"]},
-                }
-
-            self._pub_ref_path.publish(self._to_ros_path(ref_traj_enu.T))
-            self._pub_yaw_cmd.publish(yaw_msg)
-
-            current_state = self.get_agent_state()
-            current_pos = np.array([
-                current_state["position"]["x"],
-                current_state["position"]["y"],
-                current_state["position"]["z"],
-            ], dtype=float)
-            dist = float(np.linalg.norm(current_pos - target_enu))
-
-            if dist < pos_threshold:
-                break
-
-            time.sleep(0.1)
-
-        # ===== STAGE 2: 旋转 =====
-        yaw_rate = 0.5 # rad / s
-        start_time = time.time()
-        dt = 0.03
-
-        current_yaw_rad = math.radians(current_yaw_deg)
-        yaw_msg = Float32()
-        yaw_msg.data = float(current_yaw_rad)
-
-        while True:
-            elapsed = time.time() - start_time
-            if elapsed > timeout:
-                final_state = self.get_agent_state()
-                final_pos = final_state["position"]
-                return {
-                    "success": False,
-                    "position": {"x": final_pos["x"], "y": final_pos["y"], "z": final_pos["z"]},
-                }
-            yaw_error_rad = wrap_pi(target_yaw_rad - current_yaw_rad)
-            step = math.copysign(min(abs(yaw_error_rad), yaw_rate * dt), yaw_error_rad)
-            current_yaw_rad = wrap_pi(current_yaw_rad + step)
-            yaw_msg.data = float(current_yaw_rad)
-
-            current_state = self.get_agent_state()
-            hold_enu = np.array([
-                current_state["position"]["x"],
-                current_state["position"]["y"],
-                current_state["position"]["z"],
-            ], dtype=float)
-            hold_ref = np.repeat(hold_enu.reshape(3, 1), horizon + 1, axis=1)
-
-            self._pub_ref_path.publish(self._to_ros_path(hold_ref.T))
-            self._pub_yaw_cmd.publish(yaw_msg)
-
-            current_yaw = current_state["rotation"]["y"]
-            yaw_error = abs((current_yaw - target_yaw_deg + 180) % 360 - 180)
-
-            if yaw_error < yaw_threshold_deg:
-                return {
-                    "success": True,
-                    "position": {
-                        "x": float(hold_enu[0]),
-                        "y": float(hold_enu[1]),
-                        "z": float(hold_enu[2]),
-                    },
-                }
-
-            time.sleep(dt)
-
-    def _to_ros_path(self, points_enu: np.ndarray) -> NavPath:
-        """将 (M, 3) ENU 点转换为 nav_msgs/Path"""
-        msg = NavPath()
-        msg.header.frame_id = str(_CFG.plan2track.frame_id)
-        msg.header.stamp = self.node.get_clock().now().to_msg()
-        msg.poses = []
-
-        for x, y, z in points_enu:
-            pose = PoseStamped()
-            pose.header = msg.header
-            pose.pose.position.x = float(x)
-            pose.pose.position.y = float(y)
-            pose.pose.position.z = float(z)
-            pose.pose.orientation.w = 1.0
-            msg.poses.append(pose)
-
-        return msg
-
 
     def __enter__(self):
         return self
