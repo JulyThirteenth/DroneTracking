@@ -2,7 +2,7 @@
 import os, math
 from dotenv import load_dotenv
 
-def init_agent_env():
+def init_agent_env_and_create_agent():
     load_dotenv()
 
     provider = os.getenv("LLM_PROVIDER", "OPENAI").upper()
@@ -36,8 +36,9 @@ def init_agent_env():
     print(f"{provider}模型 {model_name} 加载成功, TEMP={temperature}")
 
     from .ros2_control import ROS2Control
-    from .spf_tools import init_env
+    from .spf_tools import init_env, TOOLS_LIST
     from .spf_geometry import SPFGeometry
+    from .spf_agent import create_spf_agent
 
     # 用`ros2 topic echo /rgb --once | grep -E "width:|height:"`来获取 width 和 height
     width = 640
@@ -62,4 +63,5 @@ def init_agent_env():
         sub_llm=llm
     )
 
-    print("智能体已与ROS2环境及大模型成功绑定")
+    print("[embodied_agent] 智能体已与ROS2环境及大模型成功绑定")
+    return create_spf_agent(llm, tools=TOOLS_LIST)
