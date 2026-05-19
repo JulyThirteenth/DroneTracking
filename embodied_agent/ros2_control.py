@@ -9,9 +9,7 @@ from rclpy.node import Node
 
 from sensor_msgs.msg import Image as ROSImage
 from px4_msgs.msg import VehicleLocalPosition
-from nav_msgs.msg import Path as NavPath
 from geometry_msgs.msg import PoseStamped
-from std_msgs.msg import Float32
 
 from cv_bridge import CvBridge
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
