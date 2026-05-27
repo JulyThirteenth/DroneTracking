@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from fsm_core import Transition
+
 DEFAULT_CMD_TOPIC = "/fsm/cmd"
 DEFAULT_STATE_TOPIC = "/fsm/state"
 
@@ -54,3 +56,7 @@ TRANSITION_SPECS: tuple[tuple[str, str, str], ...] = (
     (STATE_RETURN_HOVER, EVENT_ABORT, STATE_HOVER),
     (STATE_HOVER, EVENT_ABORT, STATE_HOVER),
 )
+
+def build_transitions() -> list[Transition]:
+    """Return the FSM transition table."""
+    return [Transition(src, event, dst) for src, event, dst in TRANSITION_SPECS]

@@ -1,2 +1,1 @@
-"""Finite state machine utilities for drone_racing."""
-
+"""Finite state machine utilities for DroneTracking."""

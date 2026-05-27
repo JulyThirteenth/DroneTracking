@@ -1,0 +1,5 @@
+# x y z (NED)
+# Straight ENU line from (0,0,1.2) to (10,0,1.2), passing through cube at ENU (5,0,1.2).
+0.0, 0.0, -1.2
+0.0, 5.0, -1.2
+0.0, 10.0, -1.2

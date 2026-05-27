@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SESSION="${1:-dronecnt}"
-CONFIG_FILE="${2:-${DRONE_RACING_CONFIG:-}}"
+CONFIG_FILE="${2:-${DRONE_TRACKING_CONFIG:-}}"
 if [[ $# -gt 2 ]]; then
   echo "Usage: $0 [tmux_session_name] [config_yaml]"
   exit 1
@@ -16,7 +16,7 @@ PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 if tmux has-session -t "${SESSION}" 2>/dev/null; then
   if [[ -n "${CONFIG_FILE}" ]]; then
     echo "[INFO] tmux session '${SESSION}' already exists. Existing processes keep old config."
-    echo "[INFO] Recreate session to apply DRONE_RACING_CONFIG=${CONFIG_FILE}."
+    echo "[INFO] Recreate session to apply DRONE_TRACKING_CONFIG=${CONFIG_FILE}."
   fi
   tmux attach -t "${SESSION}"
   exit 0
@@ -30,8 +30,8 @@ tmux select-layout -t "${SESSION}":0 even-vertical
 
 ENV_PREFIX=""
 if [[ -n "${CONFIG_FILE}" ]]; then
-  ENV_PREFIX="export DRONE_RACING_CONFIG=\"${CONFIG_FILE}\" && "
-  echo "[INFO] DRONE_RACING_CONFIG=${CONFIG_FILE}"
+  ENV_PREFIX="export DRONE_TRACKING_CONFIG=\"${CONFIG_FILE}\" && "
+  echo "[INFO] DRONE_TRACKING_CONFIG=${CONFIG_FILE}"
 fi
 
 tmux send-keys -t "${SESSION}":0.0 \

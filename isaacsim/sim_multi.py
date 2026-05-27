@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 """
-Multi-vehicle Isaac Sim app for drone_racing.
+Multi-vehicle Isaac Sim app for DroneTracking.
 
 Startup flow (interactive):
 1) Select scene file from `scenes/`
 2) Select number of vehicles
-3) Select one task path file for each vehicle from `tasks/`
+3) Select one waypoint file for each vehicle from `plan2track/waypoints/`
 """
 
 from pathlib import Path
@@ -169,7 +169,7 @@ def _prompt_vehicle_count() -> int:
 def main():
     pre_root = Path(__file__).resolve().parent.parent
     scenes_dir = pre_root / "scenes"
-    tasks_dir = pre_root / "tasks"
+    tasks_dir = pre_root / "plan2track" / "waypoints"
 
     scene_files = _discover_scene_files(scenes_dir)
     if not scene_files:
@@ -186,7 +186,7 @@ def main():
     task_files = _discover_task_files(tasks_dir)
     if not task_files:
         raise FileNotFoundError(f"No task files found under: {tasks_dir}")
-    _print_indexed_files(task_files, title=f"Tasks dir: {tasks_dir}")
+    _print_indexed_files(task_files, title=f"Waypoints dir: {tasks_dir}")
 
     task_paths: list[Path] = []
     for vehicle_id in range(vehicle_count):

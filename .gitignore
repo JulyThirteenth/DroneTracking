@@ -1,3 +1,6 @@
+scenes/behavior1k/
+fsm/log/
+
 *.jsonl
 
 # Byte-compiled / optimized / DLL files

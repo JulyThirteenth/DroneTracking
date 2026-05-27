@@ -1,6 +1,8 @@
-# drone_racing
+# DroneTracking
 
-Current workflow for Pegasus Simulator 5.1, PX4 1.16, ROS 2 Humble, and the `mpcc` conda environment.
+DroneTracking is a Pegasus/Isaac Sim based drone tracking and obstacle-avoidance
+workspace. The current workflow targets Isaac Sim 5.1, PX4 1.16, ROS 2 Humble,
+and the `mpcc` conda environment.
 
 <p align="center">
   <img src="./assets/chaser_racing.gif" alt="Chaser racing" width="32%">
@@ -13,34 +15,38 @@ Current workflow for Pegasus Simulator 5.1, PX4 1.16, ROS 2 Humble, and the `mpc
 - Isaac Sim 5.1 with Pegasus Simulator
 - PX4 1.16 configured in the Pegasus extension
 - ROS 2 Humble on Ubuntu 22.04
-- `px4-ros_ws` overlay built and sourced by `tools/simdrone_env.sh`
+- `px4-ros_ws` overlay available through `tools/simdrone_env.sh`
 - `conda` environment `mpcc`
 - ROS 2 package: `px4_msgs`
+- Optional: QGroundControl at `~/DroneSimulator/QGroundControl-x86_64.AppImage`
 
 Load the project environment with:
 
 ```bash
-cd /home/shaw/DroneSimulator/PegasusSimulator/examples/drone_racing
+cd /home/shaw/DroneSimulator/PegasusSimulator/examples/DroneTracking
 source ./tools/simdrone_env.sh
 ```
 
 ## Config
 
-Runtime options are loaded from YAML through `DRONE_RACING_CONFIG`.
+Runtime options are loaded from YAML through `DRONE_TRACKING_CONFIG`.
 
 ```bash
-export DRONE_RACING_CONFIG=config_0.yaml
-export DRONE_RACING_CONFIG=config_1.yaml
-export DRONE_RACING_CONFIG=cfg_visual.yaml
-export DRONE_RACING_CONFIG=cfg_lidar.yaml
+export DRONE_TRACKING_CONFIG=config_0.yaml
+export DRONE_TRACKING_CONFIG=config_1.yaml
+export DRONE_TRACKING_CONFIG=config_oa.yaml
+export DRONE_TRACKING_CONFIG=cfg_visual.yaml
+export DRONE_TRACKING_CONFIG=cfg_lidar.yaml
 ```
 
-Relative config names are resolved under `yamls/`; absolute paths also work. If unset, `config_0.yaml` is used.
+Relative config names are resolved under `yamls/`; absolute paths also work. If
+unset, `yamls/config_0.yaml` is used.
 
-Current built-in configs:
+Built-in configs:
 
 - `config_0.yaml`: default single-vehicle config
 - `config_1.yaml`: namespaced `/px4_1/*` config
+- `config_oa.yaml`: MPC obstacle-avoidance config
 - `cfg_visual.yaml`: visual pipeline config
 - `cfg_lidar.yaml`: lidar pipeline config
 
@@ -49,58 +55,96 @@ Current built-in configs:
 Recommended launcher:
 
 ```bash
-cd /home/shaw/DroneSimulator/PegasusSimulator/examples/drone_racing
+cd /home/shaw/DroneSimulator/PegasusSimulator/examples/DroneTracking
 ./tools/simdrone_single.sh
 ```
 
-It starts Isaac Sim, `MicroXRCEAgent`, and QGroundControl.
+It starts a tmux session with:
+
+- `rviz2 -d tools/layout.rviz`
+- `python isaacsim/tf_tree.py`
+- `isaac_run isaacsim/sim_single.py`
+- `MicroXRCEAgent udp4 -p 8888`
+- QGroundControl
 
 Manual startup:
 
 ```bash
-cd /home/shaw/DroneSimulator/PegasusSimulator/examples/drone_racing
-isaac_run ./isaacsim/sim_single.py
+cd /home/shaw/DroneSimulator/PegasusSimulator/examples/DroneTracking
+source ./tools/simdrone_env.sh
+isaac_run isaacsim/sim_single.py
 MicroXRCEAgent udp4 -p 8888
 ~/DroneSimulator/QGroundControl-x86_64.AppImage
 ```
 
-Task and scene selection:
+Waypoint and scene selection:
 
 ```bash
-isaac_run ./isaacsim/sim_single.py --list-tasks
-isaac_run ./isaacsim/sim_single.py --list-scenes
-isaac_run ./isaacsim/sim_single.py --task-index 0 --scene-index 0
+isaac_run isaacsim/sim_single.py --list-tasks
+isaac_run isaacsim/sim_single.py --list-scenes
+isaac_run isaacsim/sim_single.py --task-index 0 --scene-index 0
 ```
+
+`sim_single.py` loads waypoint files from `plan2track/waypoints/` and scene files
+from `scenes/*.txt`. Selecting the `behavior1k` scene source loads a USD scene
+from `scenes/behavior1k/` and samples a random spawn point from the occupancy
+map; task selection is skipped for `behavior1k`.
+
+Behavior1k examples:
+
+```bash
+isaac_run isaacsim/sim_single.py --scene-source behavior1k --list-scenes
+isaac_run isaacsim/sim_single.py --scene-source behavior1k --scene-index 0
+```
+
+`tools/simdrone_single.sh` sources `tools/export_mtl.sh` before starting Isaac
+Sim so behavior1k material paths are available.
 
 ## Start Controller
 
-Recommended launcher:
+Tracking only:
 
 ```bash
-cd /home/shaw/DroneSimulator/PegasusSimulator/examples/drone_racing
+cd /home/shaw/DroneSimulator/PegasusSimulator/examples/DroneTracking
 ./tools/run_code.sh
-./tools/run_code.sh mysession cfg_visual.yaml
+./tools/run_code.sh dronecnt cfg_visual.yaml
 ```
 
-It starts:
+Obstacle-avoidance stack:
+
+```bash
+cd /home/shaw/DroneSimulator/PegasusSimulator/examples/DroneTracking
+./tools/run_oa_code.sh
+./tools/run_oa_code.sh dronecnt config_0.yaml
+```
+
+`run_code.sh` starts:
 
 - `python plan2track/plan2track.py`
 - `python fsm/fsm_node.py`
 - `python fsm/fsm_app.py`
 
+`run_oa_code.sh` starts the same controller panes and additionally starts:
+
+- `python perception/depth2scan.py`
+
 Manual startup:
 
 ```bash
-cd /home/shaw/DroneSimulator/PegasusSimulator/examples/drone_racing
+cd /home/shaw/DroneSimulator/PegasusSimulator/examples/DroneTracking
 source ./tools/simdrone_env.sh
-export DRONE_RACING_CONFIG=cfg_visual.yaml
+export DRONE_TRACKING_CONFIG=config_0.yaml
 
 python plan2track/plan2track.py
 python fsm/fsm_node.py
 python fsm/fsm_app.py
+python perception/depth2scan.py --ros-args \
+  -p depth_topic:=/depth \
+  -p scan_topic:=/depth2scan/scan \
+  -p points_topic:=/depth2scan/points \
+  -p frame_id:=drone_fpv_camera \
+  -p config_path:=$PWD/perception/yaml/depth_transform.yaml
 ```
-
-`fsm/fsm_node.py` reads controller and solver settings from the selected YAML.
 
 ## FSM Commands
 
@@ -116,15 +160,82 @@ Use `fsm/fsm_app.py` for interactive commands:
 - `state`
 - `quit`
 
-## YAML Sections
+## Planning Data
 
-The config loader is `yamls/config.py`.
+Waypoint files for tracking live under:
+
+```text
+plan2track/waypoints/
+```
+
+Minimum-snap task/control files live under:
+
+```text
+plan2track/tasks/
+```
+
+Generate waypoints with:
+
+```bash
+python plan2track/generate_waypoints.py
+```
+
+The selected waypoint file is configured by:
+
+```yaml
+tracking:
+  tasks:
+    dir_name: plan2track/waypoints
+    waypoint_file: line_waypoint.txt
+```
+
+## Perception
+
+`perception/depth2scan.py` converts a ROS depth image into:
+
+- `sensor_msgs/LaserScan` on `/depth2scan/scan`
+- `sensor_msgs/PointCloud2` on `/depth2scan/points`
+
+The depth conversion config is:
+
+```text
+perception/yaml/depth_transform.yaml
+```
+
+Current assumptions:
+
+- Isaac Sim depth image is `32FC1` in meters
+- horizontal FOV is 90 deg
+- scan bins are angular buckets over the camera horizontal FOV
+- max-range points are published as `inf` in `LaserScan` and are ignored by the
+  obstacle-avoidance controller
+
+## Controllers
+
+The runtime controller is selected by:
+
+```yaml
+runtime:
+  controller: mpc
+  solver: osqp
+```
+
+Supported controller families:
+
+- `mpc`: OSQP tracking MPC
+- `mpcc`: MPCC tracker
+
+When `tracking.hocbf.enabled` is true and depth scan points are available, the
+MPC path tracker adds HOCBF obstacle-avoidance constraints. Without valid depth
+scan points, it behaves as the normal tracking MPC.
+
+Relevant YAML sections:
 
 - `runtime`: controller and solver selection
-- `fsm`: FSM topics, logging, takeoff speed, and optional auto-land thresholds
+- `fsm`: FSM topics, logging, takeoff velocity, and auto-land thresholds
 - `plan2track`: path topics, waypoint loading mode, loop mode, fixed yaw, and `init_yaw`
 - `tracking_ros`: PX4 ROS topics, target system, and `pub_offboard`
-- `tracking.tasks`: waypoint file selection
+- `tracking.tasks`: waypoint file selection under `plan2track/waypoints`
 - `tracking.mpc`: horizon, timestep, and reference speed
 - `tracking.control`: controller timer period
 - `tracking.yaw`: yaw gain and yaw-rate limit
@@ -133,22 +244,32 @@ The config loader is `yamls/config.py`.
 - `tracking.constraints`: MPC state/input bounds
 - `tracking.mpc_cost`: MPC cost weights
 - `tracking.mpcc_cost`: MPCC cost weights
+- `tracking.hocbf`: depth scan topic, camera offset, safety radius, gains, and slack weight
 
-Notes:
+## Coordinate Notes
 
-- Isaac Sim uses an ENU world frame. Waypoint text files are loaded as NED and converted to ENU by the planner/simulation utilities.
-- `origin_mode: fixed` keeps the waypoint file origin fixed; `origin_mode: first_xy` shifts the path so the first waypoint has local `x/y = 0/0`.
-- `fixed_yaw: true` publishes `init_yaw` as the yaw command. `fixed_yaw: false` publishes path-tangent yaw.
-- `pub_offboard: false` prevents publishing the OFFBOARD `VehicleCommand`; rate setpoints and offboard mode messages are still controlled by the FSM behavior state.
+- Isaac Sim uses an ENU world frame.
+- Waypoint text files are loaded as NED and converted to ENU by planning and
+  simulation utilities.
+- `origin_mode: fixed` keeps the waypoint-file origin fixed.
+- `origin_mode: first_xy` shifts the path so the first waypoint has local
+  `x/y = 0/0`.
+- `fixed_yaw: true` publishes `init_yaw` as the yaw command.
+- `fixed_yaw: false` publishes path-tangent yaw.
 
 ## Key Files
 
+- `isaacsim/sim_single.py`: single-vehicle Isaac Sim app
+- `isaacsim/sim_utils.py`: scene, waypoint marker, and behavior1k helpers
+- `isaacsim/tf_tree.py`: ROS TF tree publisher
+- `plan2track/plan2track.py`: waypoint/path bridge for MPC/MPCC tracking
+- `plan2track/generate_waypoints.py`: minimum-snap waypoint generation helper
+- `perception/depth2scan.py`: depth image to pseudo LaserScan converter
+- `tracking/tracking_cnt.py`: controller step, CTBR conversion, and yaw-rate logic
+- `tracking/tracking_osqp.py`: OSQP MPC/HOCBF solver implementation
+- `tracking/tracking_ros.py`: PX4 ROS message bridge
 - `fsm/fsm_node.py`: FSM ROS node and transition coordinator
 - `fsm/behaviors.py`: per-state behavior and tracker command publication
 - `fsm/fsm_app.py`: interactive FSM terminal
-- `plan2track/plan2track.py`: waypoint/path bridge for MPC/MPCC tracking
-- `tracking/tracking_cnt.py`: controller step and yaw-rate logic
-- `tracking/tracking_ros.py`: PX4 ROS message bridge
-- `isaacsim/sim_single.py`: single-vehicle Isaac Sim app
 - `yamls/config.py`: YAML config loader
 - `yamls/*.yaml`: runtime configs
