@@ -2,7 +2,7 @@
 
 DroneTracking is a Pegasus/Isaac Sim based drone tracking and obstacle-avoidance
 workspace. The current workflow targets Isaac Sim 5.1, PX4 1.16, ROS 2 Humble,
-and the `mpcc` conda environment.
+and the conda environment.
 
 <p align="center">
   <img src="./assets/chaser_racing.gif" alt="Chaser racing" width="32%">
@@ -16,14 +16,13 @@ and the `mpcc` conda environment.
 - PX4 1.16 configured in the Pegasus extension
 - ROS 2 Humble on Ubuntu 22.04
 - `px4-ros_ws` overlay available through `tools/simdrone_env.sh`
-- `conda` environment `mpcc`
 - ROS 2 package: `px4_msgs`
 - Optional: QGroundControl at `~/DroneSimulator/QGroundControl-x86_64.AppImage`
 
 Load the project environment with:
 
 ```bash
-cd /home/shaw/DroneSimulator/PegasusSimulator/examples/DroneTracking
+cd ${Path2Project}/DroneTracking
 source ./tools/simdrone_env.sh
 ```
 
@@ -47,15 +46,13 @@ Built-in configs:
 - `config_0.yaml`: default single-vehicle config
 - `config_1.yaml`: namespaced `/px4_1/*` config
 - `config_oa.yaml`: MPC obstacle-avoidance config
-- `cfg_visual.yaml`: visual pipeline config
-- `cfg_lidar.yaml`: lidar pipeline config
 
 ## Start Simulation
 
 Recommended launcher:
 
 ```bash
-cd /home/shaw/DroneSimulator/PegasusSimulator/examples/DroneTracking
+cd ${Path2Project}/DroneTracking
 ./tools/simdrone_single.sh
 ```
 
@@ -70,11 +67,11 @@ It starts a tmux session with:
 Manual startup:
 
 ```bash
-cd /home/shaw/DroneSimulator/PegasusSimulator/examples/DroneTracking
+cd ${Path2Project}/DroneTracking
 source ./tools/simdrone_env.sh
 isaac_run isaacsim/sim_single.py
 MicroXRCEAgent udp4 -p 8888
-~/DroneSimulator/QGroundControl-x86_64.AppImage
+./QGroundControl-x86_64.AppImage
 ```
 
 Waypoint and scene selection:
@@ -105,7 +102,7 @@ Sim so behavior1k material paths are available.
 Tracking only:
 
 ```bash
-cd /home/shaw/DroneSimulator/PegasusSimulator/examples/DroneTracking
+cd ${Path2Project}/DroneTracking
 ./tools/run_code.sh
 ./tools/run_code.sh dronecnt cfg_visual.yaml
 ```
@@ -113,7 +110,7 @@ cd /home/shaw/DroneSimulator/PegasusSimulator/examples/DroneTracking
 Obstacle-avoidance stack:
 
 ```bash
-cd /home/shaw/DroneSimulator/PegasusSimulator/examples/DroneTracking
+cd ${Path2Project}/DroneTracking
 ./tools/run_oa_code.sh
 ./tools/run_oa_code.sh dronecnt config_0.yaml
 ```
@@ -131,7 +128,7 @@ cd /home/shaw/DroneSimulator/PegasusSimulator/examples/DroneTracking
 Manual startup:
 
 ```bash
-cd /home/shaw/DroneSimulator/PegasusSimulator/examples/DroneTracking
+cd ${Path2Project}/DroneTracking
 source ./tools/simdrone_env.sh
 export DRONE_TRACKING_CONFIG=config_0.yaml
 

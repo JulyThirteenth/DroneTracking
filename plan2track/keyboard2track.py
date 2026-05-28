@@ -37,6 +37,10 @@ from fsm.fsm_ros import latched_qos
 from yamls.config import get_cfg
 
 STATE_TRACKING = "tracking"
+KEY_UP = "\x1b[A"
+KEY_DOWN = "\x1b[B"
+KEY_RIGHT = "\x1b[C"
+KEY_LEFT = "\x1b[D"
 
 
 class KeyboardTerminal:
@@ -72,41 +76,52 @@ class KeyboardTerminal:
 class Keyboard2TrackNode(Node):
     def __init__(self):
         super().__init__("keyboard2track")
-        cfg = get_cfg()
+        self._cfg = get_cfg()
+        self._load_params()
+
+        self._position_enu: np.ndarray | None = None
+        self._yaw_cmd_enu = float(self._cfg.plan2track.init_yaw)
+        self._speed = 0.0
+        self._yaw_rate = 0.0
+        self._fsm_state = ""
+        self._manual_yaw = False
+        self._hover_position_enu: np.ndarray | None = None
+        self._target_enu: np.ndarray | None = None
+        self._terminal = KeyboardTerminal()
+
+        self._create_ros_io()
+        self.create_timer(self._publish_dt, self._tick)
+        self._log_startup()
+        self._print_status()
+
+    def _load_params(self) -> None:
+        cfg = self._cfg
         mpc = DEFAULT_CONFIG.mpc
         yaw = DEFAULT_CONFIG.yaw
         control = DEFAULT_CONFIG.control
 
         self._frame_id = str(cfg.plan2track.frame_id)
-        self._dt = float(self.declare_parameter("mpc_dt", float(mpc.dt)).value)
-        self._horizon = int(self.declare_parameter("horizon", int(mpc.horizon)).value)
-        self._target_z = float(
-            self.declare_parameter("target_z", float(cfg.fsm.takeoff_height)).value
-        )
-        self._publish_dt = float(
-            self.declare_parameter("publish_dt", max(float(control.dt), 0.02)).value
-        )
-        self._linear_step = float(self.declare_parameter("linear_step", 0.2).value)
-        self._yaw_rate_step = float(self.declare_parameter("yaw_rate_step", 0.1).value)
-        self._linear_min = float(self.declare_parameter("linear_min", 0.0).value)
-        self._linear_max = float(
-            self.declare_parameter("linear_max", float(mpc.v_ref)).value
-        )
-        yaw_rate_default = (
-            1.0 if yaw.yaw_rate_limit is None else float(yaw.yaw_rate_limit)
-        )
-        self._yaw_rate_limit = float(
-            self.declare_parameter("yaw_rate_limit", yaw_rate_default).value
+        self._dt = self._param_float("mpc_dt", mpc.dt)
+        self._horizon = self._param_int("horizon", mpc.horizon)
+        self._target_z = self._param_float("target_z", cfg.fsm.takeoff_height)
+        self._publish_dt = self._param_float("publish_dt", max(float(control.dt), 0.02))
+        self._linear_step = self._param_float("linear_step", 0.1)
+        self._yaw_rate_step = self._param_float("yaw_rate_step", 0.1)
+        self._linear_min = self._param_float("linear_min", 0.0)
+        self._linear_max = self._param_float("linear_max", mpc.v_ref)
+        self._yaw_rate_limit = self._param_float(
+            "yaw_rate_limit",
+            1.0 if yaw.yaw_rate_limit is None else yaw.yaw_rate_limit,
         )
 
-        self._position_enu: np.ndarray | None = None
-        self._yaw_cmd_enu = float(cfg.plan2track.init_yaw)
-        self._speed = 0.0
-        self._yaw_rate = 0.0
-        self._fsm_state = ""
-        self._manual_yaw = False
-        self._terminal = KeyboardTerminal()
+    def _param_float(self, name: str, default: float) -> float:
+        return float(self.declare_parameter(name, float(default)).value)
 
+    def _param_int(self, name: str, default: int) -> int:
+        return int(self.declare_parameter(name, int(default)).value)
+
+    def _create_ros_io(self) -> None:
+        cfg = self._cfg
         self.create_subscription(
             VehicleLocalPosition,
             TOPIC_VEHICLE_LOCAL_POSITION,
@@ -117,30 +132,34 @@ class Keyboard2TrackNode(Node):
             String,
             str(cfg.fsm.state_topic),
             self._on_fsm_state,
-            latched_qos(depth=1),
+            latched_qos(1),
         )
         self._pub_ref = self.create_publisher(
-            NavPath, cfg.plan2track.ref_path_topic, 10
+            NavPath, str(cfg.plan2track.ref_path_topic), 10
         )
-        self._pub_yaw = self.create_publisher(Float32, cfg.plan2track.yaw_cmd_topic, 10)
+        self._pub_yaw = self.create_publisher(
+            Float32, str(cfg.plan2track.yaw_cmd_topic), 10
+        )
         self._pub_vel = self.create_publisher(
             TwistStamped,
-            str(
-                self.declare_parameter("velocity_topic", "/keyboard/velocity_cmd").value
-            ),
+            self._param_str("velocity_topic", "/keyboard/velocity_cmd"),
             10,
         )
-        self.create_timer(self._publish_dt, self._tick)
 
+    def _param_str(self, name: str, default: str) -> str:
+        return str(self.declare_parameter(name, str(default)).value)
+
+    def _log_startup(self) -> None:
         if not self._terminal.active:
             self.get_logger().warn("stdin is not a tty; keyboard input is disabled")
         self.get_logger().info(
             "keyboard2track: Up/Down speed, Left/Right yaw_rate, Space stop, q quit"
         )
         self.get_logger().info(
-            f"publishing {cfg.plan2track.ref_path_topic}, {cfg.plan2track.yaw_cmd_topic}"
+            "publishing "
+            f"{self._cfg.plan2track.ref_path_topic}, "
+            f"{self._cfg.plan2track.yaw_cmd_topic}"
         )
-        self._print_status()
 
     def close(self) -> None:
         self._terminal.close()
@@ -156,60 +175,108 @@ class Keyboard2TrackNode(Node):
 
     def _tick(self) -> None:
         self._handle_keys(self._terminal.read())
+        self._update_yaw_cmd()
+
+        if not self._should_publish():
+            return
+
+        direction = self._direction_enu()
+        start_enu = self._reference_start_enu()
+        points = self._straight_ref_points(start_enu, direction)
+        velocity_enu = direction * self._speed
+        self._target_enu = points[-1].copy()
+        self._publish_refs(points, velocity_enu)
+        self._print_status()
+
+    def _update_yaw_cmd(self) -> None:
         self._yaw_cmd_enu = wrap_pi(
             self._yaw_cmd_enu + self._yaw_rate * self._publish_dt
         )
 
-        if self._fsm_state != STATE_TRACKING or self._position_enu is None:
-            return
+    def _should_publish(self) -> bool:
+        return self._fsm_state == STATE_TRACKING and self._position_enu is not None
 
-        direction = np.array(
-            [np.cos(self._yaw_cmd_enu), np.sin(self._yaw_cmd_enu), 0.0], dtype=float
+    def _direction_enu(self) -> np.ndarray:
+        return np.array(
+            [np.cos(self._yaw_cmd_enu), np.sin(self._yaw_cmd_enu), 0.0],
+            dtype=float,
         )
-        points = self._straight_ref_points(self._position_enu, direction)
-        self._pub_ref.publish(self._to_path(points))
-        self._pub_yaw.publish(Float32(data=float(self._yaw_cmd_enu)))
-        self._pub_vel.publish(self._to_twist(direction * self._speed))
 
-    def _straight_ref_points(self, start_enu: np.ndarray, direction_enu: np.ndarray) -> np.ndarray:
+    def _reference_start_enu(self) -> np.ndarray:
+        if self._speed > 0.0:
+            self._hover_position_enu = None
+            return self._position_enu
+
+        if self._hover_position_enu is None:
+            self._hover_position_enu = np.asarray(
+                self._position_enu, dtype=float
+            ).reshape(3).copy()
+        return self._hover_position_enu
+
+    def _publish_refs(self, points_enu: np.ndarray, velocity_enu: np.ndarray) -> None:
+        self._pub_ref.publish(self._to_path(points_enu))
+        self._pub_yaw.publish(Float32(data=float(self._yaw_cmd_enu)))
+        self._pub_vel.publish(self._to_twist(velocity_enu))
+
+    def _straight_ref_points(
+        self,
+        start_enu: np.ndarray,
+        direction_enu: np.ndarray,
+    ) -> np.ndarray:
         start_enu = np.asarray(start_enu, dtype=float).reshape(3).copy()
         start_enu[2] = self._target_z
-        end_enu = start_enu + direction_enu * self._speed * self._dt * self._horizon
+        horizon_s = self._dt * self._horizon
+        end_enu = start_enu + direction_enu * self._speed * horizon_s
         alpha = np.linspace(0.0, 1.0, self._horizon + 1, dtype=float).reshape(-1, 1)
         return start_enu.reshape(1, 3) + alpha * (end_enu - start_enu).reshape(1, 3)
 
     def _handle_keys(self, keys: str) -> None:
         if not keys:
             return
-        if "\x1b[A" in keys:
-            self._speed = min(self._linear_max, self._speed + self._linear_step)
-        if "\x1b[B" in keys:
-            self._speed = max(self._linear_min, self._speed - self._linear_step)
-        if "\x1b[C" in keys:
-            self._manual_yaw = True
-            self._yaw_rate = min(
-                self._yaw_rate_limit, self._yaw_rate + self._yaw_rate_step
-            )
-        if "\x1b[D" in keys:
-            self._manual_yaw = True
-            self._yaw_rate = max(
-                -self._yaw_rate_limit, self._yaw_rate - self._yaw_rate_step
-            )
+
+        if KEY_UP in keys:
+            self._set_speed(self._speed + self._linear_step)
+        if KEY_DOWN in keys:
+            self._set_speed(self._speed - self._linear_step)
+        if KEY_RIGHT in keys:
+            self._set_yaw_rate(self._yaw_rate + self._yaw_rate_step)
+        if KEY_LEFT in keys:
+            self._set_yaw_rate(self._yaw_rate - self._yaw_rate_step)
         if " " in keys:
-            self._speed = 0.0
-            self._yaw_rate = 0.0
+            self._stop()
         if "q" in keys:
             rclpy.shutdown()
             return
         self._print_status()
 
+    def _set_speed(self, speed: float) -> None:
+        self._speed = float(np.clip(speed, self._linear_min, self._linear_max))
+
+    def _set_yaw_rate(self, yaw_rate: float) -> None:
+        self._manual_yaw = True
+        self._yaw_rate = float(
+            np.clip(yaw_rate, -self._yaw_rate_limit, self._yaw_rate_limit)
+        )
+
+    def _stop(self) -> None:
+        self._speed = 0.0
+        self._yaw_rate = 0.0
+
     def _print_status(self) -> None:
+        target = self._target_text()
         print(
             f"\rkeyboard2track speed={self._speed:.2f} m/s, "
-            f"yaw_rate={self._yaw_rate:.2f} rad/s, state={self._fsm_state or 'unknown'}",
+            f"yaw_rate={self._yaw_rate:.2f} rad/s, "
+            f"state={self._fsm_state or 'unknown'}, target={target}",
             end="",
             flush=True,
         )
+
+    def _target_text(self) -> str:
+        if self._target_enu is None:
+            return "unknown"
+        x, y, z = np.asarray(self._target_enu, dtype=float).reshape(3)
+        return f"({x:.2f}, {y:.2f}, {z:.2f})"
 
     def _to_path(self, points_enu: np.ndarray) -> NavPath:
         msg = NavPath()

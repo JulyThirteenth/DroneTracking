@@ -10,7 +10,9 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+
 import numpy as np
+
 from fsm_log import FsmCsvLogger, TickData
 from fsm_spec import (
     EVENT_LAND,
@@ -33,6 +35,7 @@ _PX4_CMD_DO_SET_MODE = 176
 _PX4_CMD_COMPONENT_ARM_DISARM = 400
 _PX4_MODE_OFFBOARD = 6.0
 _MIN_PROGRESS_DISTANCE_M = 0.01
+_DEFAULT_LOG_DIR = Path(__file__).resolve().parent / "log"
 
 
 class DroneBehaviors:
@@ -59,29 +62,19 @@ class DroneBehaviors:
             controller=str(controller),
             solver=str(solver),
         )
-        base_dir = (
-            Path(log_dir)
-            if log_dir is not None and str(log_dir).strip()
-            else (Path(__file__).resolve().parent / "log")
-        )
-        self._csv_logger = FsmCsvLogger(
+        self._csv_logger = self._create_logger(
             node=node,
-            base_dir=base_dir,
-            enabled=bool(log_enabled),
-            flush_every=int(log_flush_every),
-            meta={
-                "controller": str(controller),
-                "solver": str(solver),
-                "dt_control_s": float(cfg.control.dt),
-                "takeoff_velocity": float(takeoff_velocity),
-                "takeoff_height": float(takeoff_height),
-            },
+            cfg=cfg,
+            controller=controller,
+            solver=solver,
+            log_dir=log_dir,
+            log_enabled=log_enabled,
+            log_flush_every=log_flush_every,
+            takeoff_velocity=takeoff_velocity,
+            takeoff_height=takeoff_height,
         )
-        if self._csv_logger.enabled and self._csv_logger.run_dir is not None:
-            node.get_logger().info(f"Logging to: {self._csv_logger.run_dir}")
 
-        self._controller = str(getattr(self._tracker, "controller", _CONTROLLER_MPC))
-        self._controller = self._controller.lower().strip()
+        self._controller = self._tracker_controller()
         self._horizon_steps = int(getattr(self._tracker, "horizon", 10))
         self._tracker_dt_s = float(getattr(self._tracker, "dt", 0.1))
         self._takeoff_velocity = max(float(takeoff_velocity), 1e-3)
@@ -100,6 +93,46 @@ class DroneBehaviors:
         # After AUTO.LAND, stop publishing offboard mode and rates setpoints.
         self._disengaged: bool = False
 
+    def _create_logger(
+        self,
+        *,
+        node: Any,
+        cfg: Any,
+        controller: str,
+        solver: str,
+        log_dir: str | None,
+        log_enabled: bool,
+        log_flush_every: int,
+        takeoff_velocity: float,
+        takeoff_height: float,
+    ) -> FsmCsvLogger:
+        logger = FsmCsvLogger(
+            node=node,
+            base_dir=self._log_dir(log_dir),
+            enabled=bool(log_enabled),
+            flush_every=int(log_flush_every),
+            meta={
+                "controller": str(controller),
+                "solver": str(solver),
+                "dt_control_s": float(cfg.control.dt),
+                "takeoff_velocity": float(takeoff_velocity),
+                "takeoff_height": float(takeoff_height),
+            },
+        )
+        if logger.enabled and logger.run_dir is not None:
+            node.get_logger().info(f"Logging to: {logger.run_dir}")
+        return logger
+
+    @staticmethod
+    def _log_dir(log_dir: str | None) -> Path:
+        if log_dir is not None and str(log_dir).strip():
+            return Path(log_dir)
+        return _DEFAULT_LOG_DIR
+
+    def _tracker_controller(self) -> str:
+        controller = getattr(self._tracker, "controller", _CONTROLLER_MPC)
+        return str(controller).lower().strip()
+
     def close(self) -> None:
         if self._csv_logger is not None:
             self._csv_logger.close()
@@ -114,18 +147,22 @@ class DroneBehaviors:
         self._yaw_cmd_enu = self._init_yaw_enu
 
     def update_path(self, path_points_enu: np.ndarray) -> None:
-        if int(path_points_enu.shape[0]) < 1:
+        if not self._has_points(path_points_enu):
             return
 
         self._set_start_point_once(path_points_enu[0], source="path")
         self._path_points_enu = path_points_enu
 
     def update_ref_traj(self, ref_traj_enu: np.ndarray) -> None:
-        if int(ref_traj_enu.shape[0]) < 1:
+        if not self._has_points(ref_traj_enu):
             return
 
         self._set_start_point_once(ref_traj_enu[0], source="ref_traj")
         self._ref_traj_enu = ref_traj_enu[: self._horizon_steps + 1].T
+
+    @staticmethod
+    def _has_points(points_enu: np.ndarray | None, *, min_count: int = 1) -> bool:
+        return points_enu is not None and int(points_enu.shape[0]) >= int(min_count)
 
     def on_enter(self, state: str, event_name: str) -> None:
         """Handle FSM state-entry actions."""
@@ -135,14 +172,10 @@ class DroneBehaviors:
 
         if state == STATE_READY:
             self._enable_offboard()
-            return
-
-        if state == STATE_HOVER_START and event_name == EVENT_TAKEOFF:
+        elif state == STATE_HOVER_START and event_name == EVENT_TAKEOFF:
             self._enable_offboard()
             self._arm_vehicle()
-            return
-
-        if state == STATE_PREFLIGHT and event_name == EVENT_LAND:
+        elif state == STATE_PREFLIGHT and event_name == EVENT_LAND:
             self._send_land()
             self._reset_tracking_inputs()
 
@@ -153,23 +186,26 @@ class DroneBehaviors:
         obstacle_points_enu: np.ndarray | None = None,
     ) -> None:
         """Advance the behavior loop for the current FSM state."""
-        if (
-            self._vehicle_state is None
-            or self._disengaged
-            or fsm_state == STATE_PREFLIGHT
-        ):
+        if not self._can_tick(fsm_state):
             return
 
         self._bridge.publish_offboard_mode()
 
-        ref_traj_enu = self._reference_for_state(fsm_state)
+        reference_enu = self._reference_for_state(fsm_state)
         p_cmd, q_cmd, r_cmd, thrust = self._run_tracker(
-            ref_traj_enu,
+            reference_enu,
             dt,
             obstacle_points_enu,
         )
         self._bridge.publish_rates_setpoint(p_cmd, q_cmd, r_cmd, thrust)
-        self._log_tick(fsm_state, ref_traj_enu, p_cmd, q_cmd, r_cmd, thrust)
+        self._log_tick(fsm_state, reference_enu, p_cmd, q_cmd, r_cmd, thrust)
+
+    def _can_tick(self, fsm_state: str) -> bool:
+        return (
+            self._vehicle_state is not None
+            and not self._disengaged
+            and fsm_state != STATE_PREFLIGHT
+        )
 
     def _set_start_point_once(self, point_enu: np.ndarray, *, source: str) -> None:
         if self._start_point_enu is not None:
@@ -229,10 +265,7 @@ class DroneBehaviors:
         dt: float,
         obstacle_points_enu: np.ndarray | None,
     ) -> tuple[float, float, float, float]:
-        ref_traj_enu = reference_enu if self._controller == _CONTROLLER_MPC else None
-        path_points_enu = (
-            reference_enu if self._controller == _CONTROLLER_MPCC else None
-        )
+        ref_traj_enu, path_points_enu = self._tracker_inputs(reference_enu)
         p_cmd, q_cmd, r_cmd, thrust, _ = self._tracker.step(
             self._vehicle_state.position_enu,
             self._vehicle_state.velocity_enu,
@@ -247,6 +280,15 @@ class DroneBehaviors:
         )
         return float(p_cmd), float(q_cmd), float(r_cmd), float(thrust)
 
+    def _tracker_inputs(
+        self, reference_enu: np.ndarray | None
+    ) -> tuple[np.ndarray | None, np.ndarray | None]:
+        if self._controller == _CONTROLLER_MPC:
+            return reference_enu, None
+        if self._controller == _CONTROLLER_MPCC:
+            return None, reference_enu
+        return None, None
+
     def _log_tick(
         self,
         fsm_state: str,
@@ -260,32 +302,43 @@ class DroneBehaviors:
             return
 
         try:
-            debug = getattr(self._tracker, "last_debug", {}) or {}
             self._csv_logger.log_tick(
-                TickData(
-                    fsm_state=str(fsm_state),
-                    pos_enu=np.asarray(self._vehicle_state.position_enu, dtype=float),
-                    ref_enu=self._first_reference_point_enu(reference_enu),
-                    vel_enu=np.asarray(self._vehicle_state.velocity_enu, dtype=float),
-                    acc_enu=np.asarray(self._vehicle_state.accel_enu, dtype=float),
-                    yaw_enu=float(self._vehicle_state.yaw_enu),
-                    p_cmd=float(p_cmd),
-                    q_cmd=float(q_cmd),
-                    r_cmd=float(r_cmd),
-                    thrust_cmd=float(thrust),
-                    acc_est_enu=debug.get("a_est_enu", None),
-                    jerk_cmd_enu=debug.get("jerk_cmd_enu", None),
-                    acc_cmd_enu=debug.get("acc_cmd_enu", None),
-                    jerk_cmd_ned=debug.get("jerk_cmd_ned", None),
-                    acc_cmd_ned=debug.get("acc_cmd_ned", None),
-                    yaw_cmd_enu=debug.get("yaw_cmd_enu", None),
-                    yaw_rate_cmd_enu=debug.get("yaw_rate_cmd_enu", None),
-                    yaw_cmd_ned=debug.get("yaw_cmd_ned", None),
-                    yaw_rate_cmd_ned=debug.get("yaw_rate_cmd_ned", None),
-                )
+                self._tick_data(fsm_state, reference_enu, p_cmd, q_cmd, r_cmd, thrust)
             )
         except Exception:
             pass
+
+    def _tick_data(
+        self,
+        fsm_state: str,
+        reference_enu: np.ndarray | None,
+        p_cmd: float,
+        q_cmd: float,
+        r_cmd: float,
+        thrust: float,
+    ) -> TickData:
+        debug = getattr(self._tracker, "last_debug", {}) or {}
+        return TickData(
+            fsm_state=str(fsm_state),
+            pos_enu=np.asarray(self._vehicle_state.position_enu, dtype=float),
+            ref_enu=self._first_reference_point_enu(reference_enu),
+            vel_enu=np.asarray(self._vehicle_state.velocity_enu, dtype=float),
+            acc_enu=np.asarray(self._vehicle_state.accel_enu, dtype=float),
+            yaw_enu=float(self._vehicle_state.yaw_enu),
+            p_cmd=float(p_cmd),
+            q_cmd=float(q_cmd),
+            r_cmd=float(r_cmd),
+            thrust_cmd=float(thrust),
+            acc_est_enu=debug.get("a_est_enu"),
+            jerk_cmd_enu=debug.get("jerk_cmd_enu"),
+            acc_cmd_enu=debug.get("acc_cmd_enu"),
+            jerk_cmd_ned=debug.get("jerk_cmd_ned"),
+            acc_cmd_ned=debug.get("acc_cmd_ned"),
+            yaw_cmd_enu=debug.get("yaw_cmd_enu"),
+            yaw_rate_cmd_enu=debug.get("yaw_rate_cmd_enu"),
+            yaw_cmd_ned=debug.get("yaw_cmd_ned"),
+            yaw_rate_cmd_ned=debug.get("yaw_rate_cmd_ned"),
+        )
 
     def _first_reference_point_enu(
         self, reference_enu: np.ndarray | None
@@ -307,16 +360,12 @@ class DroneBehaviors:
         """Return an ENU point to hold, or None if no hold override is needed."""
         if fsm_state in {STATE_READY, STATE_HOVER}:
             return self._hold_current_position(key=fsm_state)
-
         if fsm_state == STATE_HOVER_START:
             return self._takeoff_hold_position()
-
         if fsm_state == STATE_RETURN_HOVER:
             return self._return_hold_position()
-
         if fsm_state == STATE_TRACKING:
             return self._tracking_hold_position()
-
         return self._hold_current_position(key="unknown")
 
     def _takeoff_hold_position(self) -> np.ndarray:
@@ -347,15 +396,15 @@ class DroneBehaviors:
         if self._controller == _CONTROLLER_MPCC:
             print("MPCC tracking hold position")
             return self._mpcc_tracking_hold_position()
-        else:
-            print("MPC tracking hold position")
-            return self._mpc_tracking_hold_position()
+
+        print("MPC tracking hold position")
+        return self._mpc_tracking_hold_position()
 
     def _mpcc_tracking_hold_position(self) -> np.ndarray | None:
-        if self._path_points_enu is None or int(self._path_points_enu.shape[0]) < 1:
+        if not self._has_points(self._path_points_enu):
             return self._hold_current_position(key="tracking:mpcc:hold_current_no_path")
 
-        if int(self._path_points_enu.shape[0]) < 2:
+        if not self._has_points(self._path_points_enu, min_count=2):
             return self._hold_target_once(
                 key="tracking:mpcc:hold_last_singleton",
                 point_enu=self._path_points_enu[-1],
@@ -403,17 +452,21 @@ class DroneBehaviors:
         if hold_point_enu is None:
             return None
 
-        target_enu = hold_point_enu
         current_enu = self._vehicle_state.position_enu
-        distance_m = float(np.linalg.norm(target_enu - current_enu))
-        if not np.isfinite(distance_m) or distance_m <= _MIN_PROGRESS_DISTANCE_M:
-            return self._repeat_reference(target_enu)
+        distance_m = self._distance(current_enu, hold_point_enu)
+        if distance_m <= _MIN_PROGRESS_DISTANCE_M:
+            return self._repeat_reference(hold_point_enu)
 
         if fsm_state == STATE_HOVER_START:
-            return self._takeoff_reference(current_enu, target_enu, distance_m)
+            return self._takeoff_reference(current_enu, hold_point_enu, distance_m)
 
         progress = np.linspace(0.0, 1.0, self._horizon_steps + 1, dtype=float)
-        return self._linear_reference(current_enu, target_enu, progress)
+        return self._linear_reference(current_enu, hold_point_enu, progress)
+
+    @staticmethod
+    def _distance(point_a_enu: np.ndarray, point_b_enu: np.ndarray) -> float:
+        distance_m = float(np.linalg.norm(point_b_enu - point_a_enu))
+        return distance_m if np.isfinite(distance_m) else 0.0
 
     def _takeoff_reference(
         self,
