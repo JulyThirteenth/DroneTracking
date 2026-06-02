@@ -36,18 +36,50 @@ cp .env.example .env
 
 ---
 
-## Quick Start (Jupyter Kernel)
+## Quick Start
 
-The notebook requires the `mpcc` conda environment (defined in [`env_ros_humble.yml`](./env_ros_humble.yml)).
+### Prerequisites
 
-### 1. Install the kernel
+The system requires the `mpcc` conda environment (defined in [`env_ros_humble.yml`](./env_ros_humble.yml)).
+
+### 1. Launch the simulator (Isaac Sim)
+
+```bash
+isaac_run /path/to/DroneTracking/isaacsim/sim_single.py \
+  --ext-folder ~/PegasusSimulator/extensions \
+  --enable pegasus.simulator \
+  --enable omni.isaac.ros2_bridge \
+  --enable omni.replicator.core
+```
+
+### 2. Start the ROS2 bridge (MicroXRCE-DDS Agent)
+
+```bash
+/path/to/Micro-XRCE-DDS-Agent/build/MicroXRCEAgent udp4 -p 8888
+```
+
+### 3. Launch the drone control pipeline
+
+```bash
+export DRONE_TRACKING_CONFIG=config_oa.yaml
+cd /path/to/DroneTracking/tools
+bash run_oa_code_1.sh
+```
+
+This starts the FSM and tracking modules in a `tmux` session (see [`run_oa_code_1.sh`](./tools/run_oa_code_1.sh) for details).
+
+### 4. Jupyter notebook development
+
+If you prefer to interact with the agent via a notebook instead of the full pipeline:
+
+#### 4.1 Install the kernel
 
 ```bash
 conda activate mpcc
 python -m ipykernel install --user --name simdrone_env --display-name "Python (SimDrone)"
 ```
 
-### 2. Edit the kernel launcher config
+#### 4.2 Edit the kernel launcher config
 
 Edit `~/.local/share/jupyter/kernels/simdrone_env/kernel.json` with the following content:
 
@@ -73,7 +105,7 @@ Edit `~/.local/share/jupyter/kernels/simdrone_env/kernel.json` with the followin
 > chmod +x /path/to/DroneTracking/tools/simdrone_env_ipynb_wrapper.sh
 > ```
 
-### 3. Open the notebook
+#### 4.3 Open the notebook
 
 ```bash
 jupyter notebook test_agent.ipynb
