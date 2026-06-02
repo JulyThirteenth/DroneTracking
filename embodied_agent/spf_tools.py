@@ -154,16 +154,7 @@ def navigate_to_point(x: float, y: float, z: float) -> str:
     start_z = start_state["position"]["z"]
     start_yaw = start_state["rotation"]["yaw"]
 
-    dx = x - start_x
-    dy = y - start_y
-    if math.sqrt(dx**2 + dy**2) > 0.1:
-        target_yaw = math.degrees(math.atan2(dx, dy)) % 360
-    else:
-        target_yaw = start_yaw
-
-    target_yaw = round(target_yaw / 30) * 30 % 360
-
-    target: NavTarget = {"x": x, "z": z,"y": y, "yaw": target_yaw}
+    target: NavTarget = {"x": x, "z": z,"y": y}
     result = _control.navigate_to_point(target)
 
     end_state = _control.get_agent_state()

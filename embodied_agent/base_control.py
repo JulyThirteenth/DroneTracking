@@ -15,7 +15,6 @@ class NavTarget(TypedDict):
     x: float # EAST
     y: float # NORTH
     z: float # UP
-    yaw: float # Yaw in degree
 
 
 class Rotation(TypedDict):
