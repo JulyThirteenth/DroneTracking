@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 import rclpy
 from geometry_msgs.msg import PoseStamped
-from nav_msgs.msg import Path as RosPath
+from nav_msgs.msg import Path as NavPath
 from px4_msgs.msg import VehicleLocalPosition
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
@@ -31,16 +31,15 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _add_project_to_sys_path() -> None:
-    for project_path in (_PROJECT_ROOT, _PROJECT_ROOT / "tracking"):
-        if str(project_path) not in sys.path:
-            sys.path.insert(0, str(project_path))
+    if str(_PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(_PROJECT_ROOT))
 
 
 _add_project_to_sys_path()
 
-from tracking_cfg import DEFAULT_CONFIG, TrackingConfig
-from tracking_ros import TOPIC_VEHICLE_LOCAL_POSITION, qos_px4_out
-from tracking_utils import (
+from tracking.tracking_cfg import DEFAULT_CONFIG, TrackingConfig
+from tracking.tracking_ros import TOPIC_VEHICLE_LOCAL_POSITION, qos_px4_out
+from tracking.tracking_utils import (
     as_vec3,
     closest_s_on_polyline,
     is_finite_vec3,
@@ -96,11 +95,7 @@ class PathCache:
 
     @property
     def has_segments(self) -> bool:
-        return (
-            self.point_count >= 2
-            and np.isfinite(self.length)
-            and self.length > 0.0
-        )
+        return self.point_count >= 2 and np.isfinite(self.length) and self.length > 0.0
 
 
 class PathReferenceBuilder:
@@ -211,7 +206,8 @@ class PathReferenceBuilder:
         delta = np.asarray(p1 - p0, dtype=float).reshape(3)
         if float(np.linalg.norm(delta[:2])) < _MIN_YAW_DELTA_M:
             return float(last_yaw)
-        return float(np.arctan2(delta[1], delta[0]))
+        yaw = float(np.arctan2(delta[1], delta[0]))
+        return float(last_yaw + wrap_pi(yaw - float(last_yaw)))
 
     def _monotonic_progress(self, s_closest: float, length: float) -> float:
         if self._last_s is None:
@@ -241,7 +237,7 @@ def _as_points_enu(data: np.ndarray) -> np.ndarray:
     return np.asarray(data, dtype=float).reshape(-1, 3)
 
 
-def _path_msg_points_enu(msg: RosPath) -> np.ndarray:
+def _path_msg_points_enu(msg: NavPath) -> np.ndarray:
     """Extract ENU points from a `nav_msgs/Path` message."""
     poses = getattr(msg, "poses", None) or []
     return np.array(
@@ -318,7 +314,7 @@ class Plan2TrackNode(Node):
         self._yaw_enu = 0.0
         self._yaw_cmd_enu_last = float(self._io_cfg.init_yaw)
         self._yaw_sample_ds_m = max(
-            float(self._tracking_cfg.mpc.v_ref) * float(self._tracking_cfg.control.dt),
+            float(self._tracking_cfg.mpc.v_ref) * float(self._tracking_cfg.mpc.dt),
             1e-6,
         )
 
@@ -331,12 +327,12 @@ class Plan2TrackNode(Node):
 
     def _create_publishers(self) -> None:
         self._pub_ref_path = self.create_publisher(
-            RosPath,
+            NavPath,
             str(self._io_cfg.ref_path_topic),
             10,
         )
         self._pub_path = self.create_publisher(
-            RosPath,
+            NavPath,
             str(self._io_cfg.out_path_topic),
             10,
         )
@@ -359,7 +355,7 @@ class Plan2TrackNode(Node):
             qos_px4_out,
         )
         self.create_subscription(
-            RosPath,
+            NavPath,
             str(self._io_cfg.path_topic),
             self._on_path,
             10,
@@ -413,7 +409,7 @@ class Plan2TrackNode(Node):
             )
         self._pub_path.publish(self._to_ros_path(path_cache.points_enu))
 
-    def _on_path(self, msg: RosPath) -> None:
+    def _on_path(self, msg: NavPath) -> None:
         points_enu = _path_msg_points_enu(msg)
         if int(points_enu.shape[0]) < 2:
             return
@@ -486,10 +482,10 @@ class Plan2TrackNode(Node):
         msg.pose.orientation.w = float(qw)
         self._pub_vehicle_pose.publish(msg)
 
-    def _to_ros_path(self, points_enu: np.ndarray) -> RosPath:
+    def _to_ros_path(self, points_enu: np.ndarray) -> NavPath:
         """Convert `(M, 3)` ENU points to `nav_msgs/Path`."""
         points = _as_points_enu(points_enu)
-        msg = RosPath()
+        msg = NavPath()
         msg.header.frame_id = self._frame_id
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.poses = []

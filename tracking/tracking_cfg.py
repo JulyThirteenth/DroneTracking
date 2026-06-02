@@ -16,10 +16,10 @@ from yamls.config import get_cfg
 @dataclass(frozen=True)
 class TasksConfig:
     """
-    Task inputs (waypoints) live under `root/dir_name/`.
+    Tracking waypoint files live under `root/dir_name/`.
     """
 
-    dir_name: str = "tasks"
+    dir_name: str = "plan2track/waypoints"
     waypoint_file: str = "half8_waypoint.txt"
 
     def dir_path(self, *, root: Path) -> Path:
@@ -83,9 +83,6 @@ class ConstraintsConfig:
     v_slack_weight: float = 10000.0
     a_slack_weight: float = 10000.0
 
-    terminal_v_weight: float = 200.0
-    terminal_a_weight: float = 200.0
-
 
 @dataclass(frozen=True)
 class MpcCostConfig:
@@ -106,6 +103,18 @@ class MpccCostConfig:
 
 
 @dataclass(frozen=True)
+class HocbfConfig:
+    enabled: bool = False
+    scan_topic: str = "/depth2scan/scan"
+    depth_camera_xyz: tuple[float, float, float] = (0.1, 0.0, 0.02)
+    obstacle_min_radius_m: float = 0.8
+    max_obstacles: int = 90
+    safe_distance: float = 0.9
+    lambda_gain: float = 0.8
+    slack_weight: float = 1.0e6
+
+
+@dataclass(frozen=True)
 class TrackingConfig:
     default_controller: str = "mpc"
     default_solver: str = "ipopt"
@@ -120,6 +129,7 @@ class TrackingConfig:
     constraints: ConstraintsConfig = field(default_factory=ConstraintsConfig)
     mpc_cost: MpcCostConfig = field(default_factory=MpcCostConfig)
     mpcc_cost: MpccCostConfig = field(default_factory=MpccCostConfig)
+    hocbf: HocbfConfig = field(default_factory=HocbfConfig)
 
 
 def _deep_update(base: dict, override: dict) -> dict:
@@ -151,6 +161,7 @@ def _load_default_config() -> TrackingConfig:
         constraints=ConstraintsConfig(**merged["constraints"]),
         mpc_cost=MpcCostConfig(**merged["mpc_cost"]),
         mpcc_cost=MpccCostConfig(**merged["mpcc_cost"]),
+        hocbf=HocbfConfig(**merged["hocbf"]),
     )
 
 
@@ -179,8 +190,6 @@ class MPCParamsCfg:
     R: np.ndarray
     Rd: np.ndarray
     track_idx: np.ndarray
-    terminal_v_weight: float
-    terminal_a_weight: float
     v_max: np.ndarray | None
     v_min: np.ndarray | None
     a_max: np.ndarray | None
@@ -206,7 +215,7 @@ def make_mpc_params(cfg: TrackingConfig, *, with_dynamics: bool) -> MPCParamsCfg
     dyn = None
     if with_dynamics:
         # Imported lazily so `--solver osqp` does not require casadi.
-        from tracking_opt import Dynamics
+        from tracking.tracking_opt import Dynamics
 
         dyn = Dynamics("uav")
 
@@ -231,8 +240,6 @@ def make_mpc_params(cfg: TrackingConfig, *, with_dynamics: bool) -> MPCParamsCfg
         a_max=_vec3_or_none(c.a_max),
         v_slack_weight=float(c.v_slack_weight),
         a_slack_weight=float(c.a_slack_weight),
-        terminal_v_weight=float(c.terminal_v_weight),
-        terminal_a_weight=float(c.terminal_a_weight),
     )
 
 

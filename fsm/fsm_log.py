@@ -31,6 +31,7 @@ _EVENTS_CSV = "events.csv"
 _META_JSON = "meta.json"
 _PLOT_PNG = "plot.png"
 _DEFAULT_LOG_SUBDIR = "log"
+_AXES_FIELDS = ("x", "y", "z")
 
 
 def _default_log_dir() -> Path:
@@ -66,12 +67,41 @@ def _maybe_node_time_ns(node: Any | None) -> int:
         return 0
 
 
+def _flush(handle: Any | None) -> None:
+    try:
+        if handle is not None:
+            handle.flush()
+    except Exception:
+        pass
+
+
+def _close(handle: Any | None) -> None:
+    try:
+        if handle is not None:
+            handle.flush()
+            handle.close()
+    except Exception:
+        pass
+
+
+def _vec_row(prefix: str, vec: np.ndarray) -> dict[str, float]:
+    return {f"{prefix}{axis}": float(vec[i]) for i, axis in enumerate(_AXES_FIELDS)}
+
+
+def _axis_row(stem: str, suffix: str, vec: np.ndarray) -> dict[str, float]:
+    return {
+        f"{stem}{axis}{suffix}": float(vec[i])
+        for i, axis in enumerate(_AXES_FIELDS)
+    }
+
+
 @dataclass(frozen=True)
 class TickData:
     """One log sample for a control loop tick."""
 
     fsm_state: str
     pos_enu: np.ndarray
+    ref_enu: np.ndarray | None
     vel_enu: np.ndarray
     acc_enu: np.ndarray
     yaw_enu: float
@@ -79,6 +109,7 @@ class TickData:
     q_cmd: float
     r_cmd: float
     thrust_cmd: float
+    acc_est_enu: np.ndarray | None = None
     jerk_cmd_enu: np.ndarray | None = None
     acc_cmd_enu: np.ndarray | None = None
     jerk_cmd_ned: np.ndarray | None = None
@@ -102,12 +133,19 @@ class FsmCsvLogger:
         "px",
         "py",
         "pz",
+        "ref_x",
+        "ref_y",
+        "ref_z",
+        "ref_err",
         "vx",
         "vy",
         "vz",
         "ax",
         "ay",
         "az",
+        "ax_est",
+        "ay_est",
+        "az_est",
         "yaw",
         "ax_cmd",
         "ay_cmd",
@@ -159,14 +197,20 @@ class FsmCsvLogger:
         if not self._enabled:
             return
 
-        base_path = Path(base_dir)
+        self._open_run(Path(base_dir), run_name, meta)
+
+    def _open_run(
+        self,
+        base_path: Path,
+        run_name: str | None,
+        meta: dict[str, Any] | None,
+    ) -> None:
         run_id = run_name or datetime.now().strftime("run_%Y%m%d_%H%M%S")
         self.run_dir = base_path / run_id
         self.run_dir.mkdir(parents=True, exist_ok=True)
 
         self.ticks_path = self.run_dir / _TICKS_CSV
         self.events_path = self.run_dir / _EVENTS_CSV
-
         self._ticks_file = self.ticks_path.open("w", newline="", encoding="utf-8")
         self._events_file = self.events_path.open("w", newline="", encoding="utf-8")
         self._ticks_writer = csv.DictWriter(
@@ -177,7 +221,14 @@ class FsmCsvLogger:
         )
         self._ticks_writer.writeheader()
         self._events_writer.writeheader()
+        self._write_meta(base_path, run_id, meta)
 
+    def _write_meta(
+        self,
+        base_path: Path,
+        run_id: str,
+        meta: dict[str, Any] | None,
+    ) -> None:
         meta_payload = dict(meta or {})
         meta_payload.setdefault("run_name", run_id)
         meta_payload.setdefault("t_wall_start_s", time.time())
@@ -193,12 +244,7 @@ class FsmCsvLogger:
     def close(self) -> None:
         """Flush and close output files."""
         for handle in (self._ticks_file, self._events_file):
-            try:
-                if handle is not None:
-                    handle.flush()
-                    handle.close()
-            except Exception:
-                pass
+            _close(handle)
         self._ticks_file = None
         self._events_file = None
         self._ticks_writer = None
@@ -212,60 +258,52 @@ class FsmCsvLogger:
         if not self._enabled or self._events_writer is None:
             return
         t_wall_s, t_ros_ns = self._timestamps()
-        self._events_writer.writerow(
-            {
-                "t_wall_s": t_wall_s,
-                "t_ros_ns": int(t_ros_ns),
-                "state": str(state),
-                "event": str(event),
-            }
-        )
-        try:
-            self._events_file.flush()
-        except Exception:
-            pass
+        self._events_writer.writerow({
+            "t_wall_s": t_wall_s,
+            "t_ros_ns": int(t_ros_ns),
+            "state": str(state),
+            "event": str(event),
+        })
+        _flush(self._events_file)
 
     def log_tick(self, tick: TickData) -> None:
         """Append a control-loop sample to `ticks.csv`."""
         if not self._enabled or self._ticks_writer is None:
             return
 
+        self._ticks_writer.writerow(self._tick_row(tick))
+        self._tick_count += 1
+        if (self._tick_count % self._flush_every) == 0:
+            _flush(self._ticks_file)
+
+    def _tick_row(self, tick: TickData) -> dict[str, Any]:
         t_wall_s, t_ros_ns = self._timestamps()
         pos = _to_vec3(tick.pos_enu)
+        ref = _to_vec3(tick.ref_enu)
         vel = _to_vec3(tick.vel_enu)
         acc = _to_vec3(tick.acc_enu)
 
+        acc_est = _to_vec3(tick.acc_est_enu)
         acc_cmd = _to_vec3(tick.acc_cmd_enu)
         jerk_cmd = _to_vec3(tick.jerk_cmd_enu)
         acc_cmd_ned = _to_vec3(tick.acc_cmd_ned)
         jerk_cmd_ned = _to_vec3(tick.jerk_cmd_ned)
 
-        row = {
+        return {
             "t_wall_s": t_wall_s,
             "t_ros_ns": int(t_ros_ns),
             "fsm_state": str(tick.fsm_state),
-            "px": float(pos[0]),
-            "py": float(pos[1]),
-            "pz": float(pos[2]),
-            "vx": float(vel[0]),
-            "vy": float(vel[1]),
-            "vz": float(vel[2]),
-            "ax": float(acc[0]),
-            "ay": float(acc[1]),
-            "az": float(acc[2]),
+            **_vec_row("p", pos),
+            **_vec_row("ref_", ref),
+            "ref_err": self._ref_error(pos, ref),
+            **_vec_row("v", vel),
+            **_vec_row("a", acc),
+            **_axis_row("a", "_est", acc_est),
             "yaw": _to_float(tick.yaw_enu),
-            "ax_cmd": float(acc_cmd[0]),
-            "ay_cmd": float(acc_cmd[1]),
-            "az_cmd": float(acc_cmd[2]),
-            "jx_cmd": float(jerk_cmd[0]),
-            "jy_cmd": float(jerk_cmd[1]),
-            "jz_cmd": float(jerk_cmd[2]),
-            "ax_cmd_ned": float(acc_cmd_ned[0]),
-            "ay_cmd_ned": float(acc_cmd_ned[1]),
-            "az_cmd_ned": float(acc_cmd_ned[2]),
-            "jx_cmd_ned": float(jerk_cmd_ned[0]),
-            "jy_cmd_ned": float(jerk_cmd_ned[1]),
-            "jz_cmd_ned": float(jerk_cmd_ned[2]),
+            **_axis_row("a", "_cmd", acc_cmd),
+            **_axis_row("j", "_cmd", jerk_cmd),
+            **_axis_row("a", "_cmd_ned", acc_cmd_ned),
+            **_axis_row("j", "_cmd_ned", jerk_cmd_ned),
             "yaw_cmd": _to_float(tick.yaw_cmd_enu),
             "yaw_rate_cmd": _to_float(tick.yaw_rate_cmd_enu),
             "yaw_cmd_ned": _to_float(tick.yaw_cmd_ned),
@@ -275,14 +313,12 @@ class FsmCsvLogger:
             "r_cmd": _to_float(tick.r_cmd),
             "thrust_cmd": _to_float(tick.thrust_cmd),
         }
-        self._ticks_writer.writerow(row)
 
-        self._tick_count += 1
-        if (self._tick_count % self._flush_every) == 0:
-            try:
-                self._ticks_file.flush()
-            except Exception:
-                pass
+    @staticmethod
+    def _ref_error(pos: np.ndarray, ref: np.ndarray) -> float:
+        if not np.all(np.isfinite(ref)):
+            return float("nan")
+        return float(np.linalg.norm(ref - pos))
 
 
 def _read_numeric_csv_columns(csv_path: Path) -> dict[str, np.ndarray]:
@@ -390,6 +426,81 @@ def _add_event_markers(
         )
 
 
+def _resolve_run_paths(
+    run_dir: Path | None,
+    ticks_path: Path | None,
+    events_path: Path | None,
+    out_path: Path | None,
+) -> tuple[Path | None, Path | None, Path | None]:
+    if run_dir is None:
+        return ticks_path, events_path, out_path
+    return (
+        ticks_path or (run_dir / _TICKS_CSV),
+        events_path or (run_dir / _EVENTS_CSV),
+        out_path or (run_dir / _PLOT_PNG),
+    )
+
+
+def _make_plot_axes(fig: Any) -> dict[str, Any]:
+    grid = fig.add_gridspec(5, 2)
+    axes = {
+        "err": fig.add_subplot(grid[0, :]),
+    }
+    axes["pos"] = fig.add_subplot(grid[1, 0], sharex=axes["err"])
+    axes["vel"] = fig.add_subplot(grid[1, 1], sharex=axes["err"])
+    axes["ax"] = fig.add_subplot(grid[2, 0], sharex=axes["err"])
+    axes["jerk"] = fig.add_subplot(grid[2, 1], sharex=axes["err"])
+    axes["ay"] = fig.add_subplot(grid[3, 0], sharex=axes["err"])
+    axes["yaw"] = fig.add_subplot(grid[3, 1], sharex=axes["err"])
+    axes["az"] = fig.add_subplot(grid[4, 0], sharex=axes["err"])
+    axes["ctbr"] = fig.add_subplot(grid[4, 1], sharex=axes["err"])
+    return axes
+
+
+def _plot_tracking_error(ax: Any, t: np.ndarray, series: Any) -> None:
+    ref_err = series("ref_err")
+    ex = series("px") - series("ref_x")
+    ey = series("py") - series("ref_y")
+    ez = series("pz") - series("ref_z")
+    err_calc = np.sqrt(ex * ex + ey * ey + ez * ez)
+    err = np.where(np.isfinite(ref_err), ref_err, err_calc)
+
+    ax.plot(t, err, label="tracking_error", linewidth=1.5)
+    ax.plot(t, ex, label="ex", alpha=0.75)
+    ax.plot(t, ey, label="ey", alpha=0.75)
+    ax.plot(t, ez, label="ez", alpha=0.75)
+    ax.axhline(0.0, color="k", alpha=0.15, linewidth=1)
+    ax.set_ylabel("track err (m)")
+    ax.legend(loc="upper right", ncol=4, fontsize=8)
+
+
+def _plot_axis_compare(ax: Any, t: np.ndarray, series: Any, axis: str) -> None:
+    ax.plot(t, series(axis), label=axis)
+    ax.plot(t, series(f"{axis}_est"), label=f"{axis}_est", linestyle=":")
+    ax.plot(t, series(f"{axis}_cmd"), label=f"{axis}_cmd", linestyle="--")
+    ax.set_ylabel(f"{axis} (ENU)")
+    ax.legend(loc="upper right", ncol=3, fontsize=8)
+
+
+def _plot_yaw(ax: Any, t: np.ndarray, series: Any) -> None:
+    yaw = _wrap_pi_array(series("yaw"))
+    yaw_cmd = _wrap_pi_array(series("yaw_cmd"))
+    ax.plot(t, yaw, label="yaw")
+    ax.plot(t, yaw_cmd, label="yaw_cmd", linestyle="--")
+    ax.plot(t, _wrap_pi_array(yaw_cmd - yaw), label="yaw_err", linestyle=":")
+    ax.set_ylabel("yaw (rad)")
+    ax.set_ylim(-float(np.pi), float(np.pi))
+    ax.legend(loc="upper right", ncol=3, fontsize=8)
+
+
+def _plot_ctbr(ax: Any, t: np.ndarray, series: Any) -> None:
+    for name in ("p_cmd", "q_cmd", "r_cmd", "thrust_cmd"):
+        ax.plot(t, series(name), label=name)
+    ax.set_ylabel("CTBR out")
+    ax.set_xlabel("t (s)")
+    ax.legend(loc="upper right", ncol=4, fontsize=8)
+
+
 def visualize_run(
     *,
     run_dir: Path | None = None,
@@ -410,10 +521,9 @@ def visualize_run(
     Returns:
       Path to the saved PNG file.
     """
-    if run_dir is not None:
-        ticks_path = ticks_path or (run_dir / _TICKS_CSV)
-        events_path = events_path or (run_dir / _EVENTS_CSV)
-        out_path = out_path or (run_dir / _PLOT_PNG)
+    ticks_path, events_path, out_path = _resolve_run_paths(
+        run_dir, ticks_path, events_path, out_path
+    )
 
     if ticks_path is None or not ticks_path.exists():
         raise FileNotFoundError("ticks.csv not found; pass run_dir or ticks_path.")
@@ -438,13 +548,14 @@ def visualize_run(
     def series(name: str) -> np.ndarray:
         return ticks.get(name, np.full_like(t, np.nan, dtype=float))
 
-    fig, axes = plt.subplots(
-        6, 1, sharex=True, figsize=(12, 12), constrained_layout=True
-    )
-    axes_list = list(axes)
+    fig = plt.figure(figsize=(16, 12), constrained_layout=True)
+    axes = _make_plot_axes(fig)
+    axes_list = list(axes.values())
+
+    _plot_tracking_error(axes["err"], t, series)
 
     _plot_xyz(
-        axes_list[0],
+        axes["pos"],
         t,
         series("px"),
         series("py"),
@@ -453,7 +564,18 @@ def visualize_run(
         labels=("x", "y", "z"),
     )
     _plot_xyz(
-        axes_list[1],
+        axes["pos"],
+        t,
+        series("ref_x"),
+        series("ref_y"),
+        series("ref_z"),
+        ylabel="pos (ENU)",
+        labels=("ref_x", "ref_y", "ref_z"),
+        styles=("--", "--", "--"),
+        alpha=0.75,
+    )
+    _plot_xyz(
+        axes["vel"],
         t,
         series("vx"),
         series("vy"),
@@ -461,28 +583,13 @@ def visualize_run(
         ylabel="vel (ENU)",
         labels=("vx", "vy", "vz"),
     )
+    _plot_axis_compare(axes["ax"], t, series, "ax")
+    _plot_axis_compare(axes["ay"], t, series, "ay")
+    _plot_axis_compare(axes["az"], t, series, "az")
+    axes["az"].set_xlabel("t (s)")
+
     _plot_xyz(
-        axes_list[2],
-        t,
-        series("ax"),
-        series("ay"),
-        series("az"),
-        ylabel="acc (ENU)",
-        labels=("ax", "ay", "az"),
-    )
-    _plot_xyz(
-        axes_list[2],
-        t,
-        series("ax_cmd"),
-        series("ay_cmd"),
-        series("az_cmd"),
-        ylabel="acc (ENU)",
-        labels=("ax_cmd", "ay_cmd", "az_cmd"),
-        styles=("--", "--", "--"),
-        alpha=0.8,
-    )
-    _plot_xyz(
-        axes_list[3],
+        axes["jerk"],
         t,
         series("jx_cmd"),
         series("jy_cmd"),
@@ -491,23 +598,8 @@ def visualize_run(
         labels=("jx_cmd", "jy_cmd", "jz_cmd"),
     )
 
-    yaw = series("yaw")
-    yaw_cmd = series("yaw_cmd")
-    yaw_err = _wrap_pi_array(yaw_cmd - yaw)
-    axes_list[4].plot(t, yaw, label="yaw")
-    axes_list[4].plot(t, yaw_cmd, label="yaw_cmd", linestyle="--")
-    axes_list[4].plot(t, yaw_err, label="yaw_err", linestyle=":")
-    axes_list[4].set_ylabel("yaw (rad)")
-    axes_list[4].set_ylim(-float(np.pi), float(np.pi))
-    axes_list[4].legend(loc="upper right", ncol=3, fontsize=8)
-
-    axes_list[5].plot(t, series("p_cmd"), label="p_cmd")
-    axes_list[5].plot(t, series("q_cmd"), label="q_cmd")
-    axes_list[5].plot(t, series("r_cmd"), label="r_cmd")
-    axes_list[5].plot(t, series("thrust_cmd"), label="thrust_cmd")
-    axes_list[5].set_ylabel("CTBR out")
-    axes_list[5].set_xlabel("t (s)")
-    axes_list[5].legend(loc="upper right", ncol=4, fontsize=8)
+    _plot_yaw(axes["yaw"], t, series)
+    _plot_ctbr(axes["ctbr"], t, series)
 
     use_ros_time = bool(np.nanmax(ticks.get("t_ros_ns", np.array([0.0]))) > 0)
     _add_event_markers(
