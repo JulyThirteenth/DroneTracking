@@ -76,7 +76,7 @@ def get_current_position_and_rotation():
     rot = state["rotation"]
     return (
         f"Current state: position(x={pos['x']:.3f}, y={pos['y']:.3f}, z={pos['z']:.3f}), "
-        f"rotation(x={rot['x']:.3f}, y={rot['y']:.3f}, z={rot['z']:.3f})"
+        f"rotation(roll={rot['roll']:.3f}, pitch={rot['pitch']:.3f}, yaw={rot['yaw']:.3f})"
     )
 
 class GetTargetInput(BaseModel):
@@ -121,7 +121,7 @@ def get_target_object(instruction: str):
     state = _control.get_agent_state()
     pos = state["position"]
     rot = state["rotation"]
-    yaw_rad = math.radians(rot["y"])
+    yaw_rad = math.radians(rot["yaw"])
 
     world_x = pos["x"] + (sx * math.cos(yaw_rad) + sy * math.sin(yaw_rad))
     world_y = pos["y"] + (-sx * math.sin(yaw_rad) + sy * math.cos(yaw_rad))
@@ -152,7 +152,7 @@ def navigate_to_point(x: float, y: float, z: float) -> str:
     start_x = start_state["position"]["x"]
     start_y = start_state["position"]["y"]
     start_z = start_state["position"]["z"]
-    start_yaw = start_state["rotation"]["y"]
+    start_yaw = start_state["rotation"]["yaw"]
 
     dx = x - start_x
     dy = y - start_y
@@ -170,7 +170,7 @@ def navigate_to_point(x: float, y: float, z: float) -> str:
     end_x = end_state["position"]["x"]
     end_y = end_state["position"]["y"]
     end_z = end_state["position"]["z"]
-    end_yaw = end_state["rotation"]["y"]
+    end_yaw = end_state["rotation"]["yaw"]
 
     if result["success"]:
         return (
@@ -186,7 +186,7 @@ def navigate_to_point(x: float, y: float, z: float) -> str:
 
 
 class RotateInput(BaseModel):
-    yaw: float = Field(description="The rotation angle (in degrees) for the agent.")
+    yaw: float = Field(description="The target yaw angle (in degrees) for the agent.")
 
 
 @tool(args_schema=RotateInput)
@@ -200,20 +200,12 @@ def rotate(yaw: float) -> str:
     target_yaw = round(yaw / 30) * 30 % 360
 
     start_state = _control.get_agent_state()
-    curr_x = start_state["position"]["x"]
-    curr_y = start_state["position"]["y"]
-    curr_z = start_state["position"]["z"]
-    start_yaw = start_state["rotation"]["y"]
+    start_yaw = start_state["rotation"]["yaw"]
 
-    result = _control.navigate_to_point({
-        "x": curr_x,
-        "y": curr_y,
-        "z": curr_z,
-        "yaw": target_yaw}
-    )
+    result = _control.rotate(target_yaw)
 
     end_state = _control.get_agent_state()
-    end_yaw = end_state["rotation"]["y"]
+    end_yaw = end_state["rotation"]["yaw"]
 
     if result["success"]:
         return (

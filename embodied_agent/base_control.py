@@ -18,14 +18,21 @@ class NavTarget(TypedDict):
     yaw: float # Yaw in degree
 
 
+class Rotation(TypedDict):
+    roll: float
+    pitch: float
+    yaw: float
+
+
 class NavResult(TypedDict):
     success: bool
     position: Point3D | None
+    yaw: float
 
 
 class AgentState(TypedDict):
     position: Point3D
-    rotation: Point3D
+    rotation: Rotation
 
 
 class BaseControl(ABC):
@@ -45,6 +52,11 @@ class BaseControl(ABC):
     @abstractmethod
     def navigate_to_point(self, target: NavTarget) -> NavResult:
         """Navigate to a specified 3D coordinate point."""
+        ...
+
+    @abstractmethod
+    def rotate(self, yaw: float) -> NavResult:
+        """Rotate the agent to a target yaw angle (in degrees)."""
         ...
 
     @abstractmethod
