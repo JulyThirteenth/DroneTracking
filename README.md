@@ -36,6 +36,7 @@ cp .env.example .env
 
 ---
 
+<<<<<<< HEAD
 ## Quick Start
 
 ### Prerequisites
@@ -312,3 +313,69 @@ Relevant YAML sections:
 - `cfg/config.py`: YAML config loader
 - `cfg/*.yaml`: runtime configs
 >>>>>>> b9b2d4b (dev obstacle avoidance: tidy code)
+=======
+## Quick Start (Jupyter Kernel)
+
+The notebook requires the `mpcc` conda environment (defined in [`env_ros_humble.yml`](./env_ros_humble.yml)).
+
+### 1. Install the kernel
+
+```bash
+conda activate mpcc
+python -m ipykernel install --user --name simdrone_env --display-name "Python (SimDrone)"
+```
+
+### 2. Edit the kernel launcher config
+
+Edit `~/.local/share/jupyter/kernels/simdrone_env/kernel.json` with the following content:
+
+```json
+{
+ "argv": [
+  "bash",
+  "/path/to/DroneTracking/tools/simdrone_env_ipynb_wrapper.sh",
+  "-f",
+  "{connection_file}"
+ ],
+ "display_name": "Python (SimDrone)",
+ "language": "python",
+ "metadata": {
+  "debugger": true
+ },
+ "kernel_protocol_version": "5.5"
+}
+```
+
+> **Note**: Make sure the wrapper script is executable:
+> ```bash
+> chmod +x /path/to/DroneTracking/tools/simdrone_env_ipynb_wrapper.sh
+> ```
+
+### 3. Open the notebook
+
+```bash
+jupyter notebook test_agent.ipynb
+```
+
+Or in VS Code, open [`test_agent.ipynb`](./test_agent.ipynb) and select the `Python (SimDrone)` kernel.
+
+---
+
+## Project Structure
+
+```
+embodied_agent/
+├── __init__.py
+├── base_control.py          # Abstract controller interface
+├── ros2_control.py          # ROS2 bridge (InfoNode + NavigationNode)
+├── spf_agent.py             # LangGraph agent definition
+├── spf_geometry.py          # Camera geometry utilities
+├── spf_navigation_prompts.py# SPF prompts & schemas
+└── spf_tools.py             # LangChain tools (get_view, navigate, rotate)
+```
+
+[`ros2_control.py`](./embodied_agent/ros2_control.py) implements two ROS2 nodes:
+
+- **`InfoNode`** — Receives camera feed, position, and attitude; provides the agent's perception.
+- **`NavigationNode`** — Publishes reference trajectories and yaw commands to the MPC tracking system.
+>>>>>>> 2aa21c2 (Update readme and env file)
