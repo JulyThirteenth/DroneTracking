@@ -1,5 +1,6 @@
 scenes/behavior1k/
 fsm/log/
+.local/
 
 *.jsonl
 

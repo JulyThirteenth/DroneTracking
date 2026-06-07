@@ -12,6 +12,8 @@ from sensor_msgs.msg import LaserScan
 from px4_msgs.msg import (
     OffboardControlMode,
     VehicleCommand,
+    VehicleAngularVelocity,
+    VehicleAttitude,
     VehicleLocalPosition,
     VehicleRatesSetpoint,
 )
@@ -28,6 +30,8 @@ TOPIC_OFFBOARD_CONTROL_MODE = _CFG.tracking_ros.offboard_control_mode_topic
 TOPIC_VEHICLE_RATES_SETPOINT = _CFG.tracking_ros.vehicle_rates_setpoint_topic
 TOPIC_VEHICLE_COMMAND = _CFG.tracking_ros.vehicle_command_topic
 TOPIC_VEHICLE_LOCAL_POSITION = _CFG.tracking_ros.vehicle_local_position_topic
+TOPIC_VEHICLE_ANGULAR_VELOCITY = "/fmu/out/vehicle_angular_velocity"
+TOPIC_VEHICLE_ATTITUDE = "/fmu/out/vehicle_attitude"
 TARGET_SYSTEM = int(_CFG.tracking_ros.target_system)
 PUB_OFFBOARD = bool(_CFG.tracking_ros.pub_offboard)
 
@@ -38,6 +42,8 @@ class VehicleState:
     velocity_enu: np.ndarray
     accel_enu: np.ndarray
     yaw_enu: float
+    body_rates: np.ndarray
+    quat_wxyz: np.ndarray
 
 
 def latched_qos(depth: int = 1) -> QoSProfile:
@@ -58,6 +64,8 @@ def derive_info_topic(state_topic: str) -> str:
 
 def vehicle_state_from_local_position(
     msg: VehicleLocalPosition,
+    body_rates: np.ndarray | None = None,
+    quat_wxyz: np.ndarray | None = None,
 ) -> VehicleState | None:
     pos_ned = np.array([msg.x, msg.y, msg.z], dtype=float)
     vel_ned = np.array([msg.vx, msg.vy, msg.vz], dtype=float)
@@ -75,7 +83,44 @@ def vehicle_state_from_local_position(
         velocity_enu=np.array([vel_ned[1], vel_ned[0], -vel_ned[2]], dtype=float),
         accel_enu=np.array([acc_ned[1], acc_ned[0], -acc_ned[2]], dtype=float),
         yaw_enu=float(np.pi / 2.0 - float(msg.heading)),
+        body_rates=(
+            np.asarray(body_rates, dtype=float).reshape(3)
+            if body_rates is not None
+            else np.zeros(3, dtype=float)
+        ),
+        quat_wxyz=(
+            np.asarray(quat_wxyz, dtype=float).reshape(4)
+            if quat_wxyz is not None
+            else np.array(
+                [
+                    np.cos(0.5 * (np.pi / 2.0 - float(msg.heading))),
+                    0.0,
+                    0.0,
+                    np.sin(0.5 * (np.pi / 2.0 - float(msg.heading))),
+                ],
+                dtype=float,
+            )
+        ),
     )
+
+
+def body_rates_from_angular_velocity(
+    msg: VehicleAngularVelocity,
+) -> np.ndarray | None:
+    rates = np.asarray(getattr(msg, "xyz", []), dtype=float).reshape(-1)
+    if rates.size != 3 or not np.all(np.isfinite(rates)):
+        return None
+    return rates.astype(float)
+
+
+def quat_from_vehicle_attitude(msg: VehicleAttitude) -> np.ndarray | None:
+    quat = np.asarray(getattr(msg, "q", []), dtype=float).reshape(-1)
+    if quat.size != 4 or not np.all(np.isfinite(quat)):
+        return None
+    norm = float(np.linalg.norm(quat))
+    if norm < 1.0e-6:
+        return None
+    return (quat / norm).astype(float)
 
 
 def path_msg_points_enu(msg: NavPath) -> np.ndarray:

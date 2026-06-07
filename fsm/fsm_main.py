@@ -9,6 +9,7 @@ from rclpy.executors import ExternalShutdownException
 
 from .fsm_log import FSMLogger
 from .fsm_mpc import MPCBehavior, MPCCBehavior
+from .fsm_rl_hover import RLHoverBehavior, RLHoverConfig
 from tracking.tracking_cnt import PathTrackerCtbr
 
 _DEFAULT_LOG_DIR = Path(__file__).resolve().parent.parent / "fsm" / "log"
@@ -132,7 +133,13 @@ def behavior_creater(
     init_yaw_enu: float,
 ):
     controller_name = str(controller).lower().strip()
-    behavior_cls = MPCCBehavior if controller_name == "mpcc" else MPCBehavior
+    behavior_cls = (
+        RLHoverBehavior
+        if controller_name == "rl_hover"
+        else MPCCBehavior
+        if controller_name == "mpcc"
+        else MPCBehavior
+    )
     logger = logger_creater(
         node=node,
         controller=controller,
@@ -145,9 +152,49 @@ def behavior_creater(
         takeoff_height=takeoff_height,
         behavior_name=f"{behavior_cls.__name__}",
     )
-    tracker = PathTrackerCtbr(
-        None, cfg=cfg, controller=str(controller), solver=str(solver)
-    )
+    tracker_controller = "mpc" if controller_name == "rl_hover" else str(controller)
+    tracker = PathTrackerCtbr(None, cfg=cfg, controller=tracker_controller, solver=str(solver))
+    if behavior_cls is RLHoverBehavior:
+        project_cfg = __import__("yamls.config", fromlist=["get_cfg"]).get_cfg()
+        checkpoint = str(project_cfg.rl_hover.checkpoint).strip()
+        if not checkpoint:
+            raise ValueError(
+                "runtime.controller=rl_hover requires rl_hover.checkpoint in YAML."
+            )
+        checkpoint_path = Path(checkpoint).expanduser()
+        if not checkpoint_path.is_absolute():
+            candidates = [
+                project_cfg.config_path.parent / checkpoint_path,
+                project_cfg.config_path.parent.parent / checkpoint_path,
+                Path.cwd() / checkpoint_path,
+            ]
+            checkpoint_path = next(
+                (candidate for candidate in candidates if candidate.exists()),
+                candidates[1],
+            )
+        rl_cfg = RLHoverConfig(
+            checkpoint=str(checkpoint_path),
+            device=str(project_cfg.rl_hover.device),
+            thrust_ratio_min=float(project_cfg.rl_hover.thrust_ratio_min),
+            thrust_ratio_max=float(project_cfg.rl_hover.thrust_ratio_max),
+            body_rate_limit=tuple(project_cfg.rl_hover.body_rate_limit),
+            hover_thrust=float(project_cfg.rl_hover.hover_thrust),
+            thrust_min=float(project_cfg.rl_hover.thrust_min),
+            thrust_max=float(project_cfg.rl_hover.thrust_max),
+            max_position_error=float(project_cfg.rl_hover.max_position_error),
+            fallback_to_mpc_tracking=bool(project_cfg.rl_hover.fallback_to_mpc_tracking),
+        )
+        behavior = behavior_cls(
+            node=node,
+            logger=logger,
+            tracker=tracker,
+            cfg=rl_cfg,
+            takeoff_height=float(takeoff_height),
+            takeoff_velocity=float(takeoff_velocity),
+        )
+        behavior.update_yaw_cmd_enu(float(init_yaw_enu))
+        return behavior
+
     kwargs = {
         "node": node,
         "logger": logger,

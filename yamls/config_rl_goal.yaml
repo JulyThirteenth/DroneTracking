@@ -1,5 +1,5 @@
 runtime:
-  controller: mpcc
+  controller: rl_hover
   solver: osqp
 
 rl_hover:
@@ -7,12 +7,12 @@ rl_hover:
   device: cpu
   thrust_ratio_min: 0.4
   thrust_ratio_max: 1.6
-  body_rate_limit: [1.5, 1.5, 1.0]
+  body_rate_limit: [0.4, 0.4, 0.3]
   hover_thrust: 0.58
   thrust_min: 0.1
   thrust_max: 0.9
   max_position_error: 4.0
-  fallback_to_mpc_tracking: true
+  fallback_to_mpc_tracking: false
 
 fsm:
   cmd_topic: /fsm/cmd
@@ -24,7 +24,7 @@ fsm:
   log_flush_every: 1
   takeoff_velocity: 0.4
   takeoff_height: 1.0
-  auto_land: True
+  auto_land: false
   auto_land_distance: 0.1
   auto_land_velocity: 0.1
   auto_land_hold_cycles: 20
@@ -35,7 +35,7 @@ plan2track:
   out_path_topic: /tracking/path
   vehicle_pose_topic: /tracking/vehicle_pose
   yaw_cmd_topic: /planning/yaw_cmd_enu
-  fixed_yaw: false
+  fixed_yaw: true
   init_yaw: 0.0
 
   path_file: ""
@@ -54,16 +54,16 @@ tracking_ros:
 tracking:
   tasks:
     dir_name: plan2track/waypoints
-    waypoint_file: comp_waypoint_1.txt
+    waypoint_file: line_waypoint.txt
   mpc:
     dt: 0.1
     horizon: 15
-    v_ref: 3.0
+    v_ref: 1.0
   control:
     dt: 0.01
   yaw:
-    kp: 0.04
-    yaw_rate_limit: 1.57
+    kp: 0.02
+    yaw_rate_limit: 0.5
   ctbr:
     hover_thrust: 0.58
     g: 9.81
@@ -72,25 +72,34 @@ tracking:
   accel_fusion:
     imu_alpha: 0.05
   constraints:
-    u_min: [-25.0, -25.0, -25.0]
-    u_max: [25.0, 25.0, 25.0]
-    du_min: [-50.0, -50.0, -50.0]
-    du_max: [50.0, 50.0, 50.0]
+    u_min: [-8.0, -8.0, -6.0]
+    u_max: [8.0, 8.0, 6.0]
+    du_min: [-20.0, -20.0, -15.0]
+    du_max: [20.0, 20.0, 15.0]
     v_min: [-8.0, -8.0, -8.0]
     v_max: [8.0, 8.0, 8.0]
-    a_min: [-10.0, -10.0, -10.0]
-    a_max: [10.0, 10.0, 10.0]
+    a_min: [-3.0, -3.0, -10.0]
+    a_max: [3.0, 3.0, 3.0]
     v_slack_weight: 10000.0
     a_slack_weight: 10000.0
   mpc_cost:
-    Q_diag: [2000.0, 2000.0, 2000.0]
-    R_diag: [0.0, 0.0, 0.0]
-    Rd_diag: [0.2, 0.2, 0.2]
+    Q_diag: [120.0, 120.0, 300.0]
+    R_diag: [0.2, 0.2, 0.2]
+    Rd_diag: [1.5, 1.5, 1.5]
     terminal: 1.0
   mpcc_cost:
-    q_contour: 500.0
-    q_lag: 2.0
+    q_contour: 200.0
+    q_lag: 1.0
     q_progress: 1.0
-    q_terminal_s: 10.0
-    vs_max: 2.0
+    q_terminal_s: 0.0
+    vs_max: 3.0
     vs_min: 0.0
+  hocbf:
+    enabled: false
+    scan_topic: /depth2scan/scan
+    depth_camera_xyz: [0.1, 0.0, 0.02]
+    obstacle_min_radius_m: 0.1
+    max_obstacles: 90
+    safe_distance: 0.5
+    lambda_gain: 0.8
+    slack_weight: 1000000.0

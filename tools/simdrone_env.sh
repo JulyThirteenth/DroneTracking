@@ -1,34 +1,56 @@
 #!/usr/bin/env bash
-# 用法：source ./tools/simulate_env.sh  或  . ./tools/simulate_env.sh
+# Usage:
+#   source ./tools/simdrone_env.sh
 
-# 如果你用 bash 执行而不是 source，就提醒
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-  echo "ERROR: 请用 source 运行："
-  echo "  source ./tools/simulate_env.sh"
-  return 1 2>/dev/null || exit 1
+  echo "ERROR: please source this file:"
+  echo "  source ./tools/simdrone_env.sh"
+  exit 1
 fi
 
-# 1) 让 conda activate 在当前 shell 可用
-# 按你的实际 conda 安装路径二选一（miniconda3/anaconda3）
-if [[ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]]; then
+_SIMDRONE_ENV_CWD="$(pwd)"
+
+if [[ -f /root/gpufree-data/workspace/activate_drone_rl.sh ]]; then
+  source /root/gpufree-data/workspace/activate_drone_rl.sh
+elif [[ -f /opt/conda/etc/profile.d/conda.sh ]]; then
+  source /opt/conda/etc/profile.d/conda.sh
+  conda activate /root/gpufree-data/conda-envs/drone-rl
+elif [[ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]]; then
   source "$HOME/miniconda3/etc/profile.d/conda.sh"
+  conda activate mpcc
 elif [[ -f "$HOME/anaconda3/etc/profile.d/conda.sh" ]]; then
   source "$HOME/anaconda3/etc/profile.d/conda.sh"
+  conda activate mpcc
 else
-  echo "ERROR: 找不到 conda.sh，请确认 conda 安装路径（miniconda3/anaconda3）"
+  echo "ERROR: cannot find conda activation script"
   return 1
 fi
 
-# 2) 激活 conda 环境
-eval "$(conda shell.bash hook)"
-conda activate mpcc
+cd "${_SIMDRONE_ENV_CWD}"
+unset _SIMDRONE_ENV_CWD
 
-# 3) source ROS2 和工作空间
+if [[ -f /root/gpufree-data/devspace/drone/setup_drone_stack.sh ]]; then
+  source /root/gpufree-data/devspace/drone/setup_drone_stack.sh
+fi
+
 source /opt/ros/humble/setup.bash
-source ~/devspace/FlightSim/px4-ros_ws/install/setup.bash
 
-# 4) 打印确认信息
-echo "[OK] CONDA_DEFAULT_ENV=$CONDA_DEFAULT_ENV"
-echo "[OK] ROS_DISTRO=$ROS_DISTRO"
+if [[ -f /root/gpufree-data/devspace/drone/IsaacSim-ros_workspaces/humble_ws/install/setup.bash ]]; then
+  source /root/gpufree-data/devspace/drone/IsaacSim-ros_workspaces/humble_ws/install/setup.bash
+elif [[ -f "$HOME/devspace/FlightSim/px4-ros_ws/install/setup.bash" ]]; then
+  source "$HOME/devspace/FlightSim/px4-ros_ws/install/setup.bash"
+fi
+
+if [[ -n "${ISAACSIM_PYTHON:-}" ]]; then
+  isaac_run() {
+    "${ISAACSIM_PYTHON}" "$@"
+  }
+  export -f isaac_run
+fi
+
+echo "[OK] python=$(command -v python)"
+echo "[OK] CONDA_DEFAULT_ENV=${CONDA_DEFAULT_ENV:-<unset>}"
+echo "[OK] ROS_DISTRO=${ROS_DISTRO:-<unset>}"
 echo "[OK] RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-<unset>}"
+echo "[OK] ISAACSIM_PATH=${ISAACSIM_PATH:-<unset>}"
 

@@ -1,273 +1,196 @@
-# DroneTracking
+# DroneTracking RL Point-Goal Deployment
 
-DroneTracking is a Pegasus/Isaac Sim based drone tracking and obstacle-avoidance
-workspace. The current workflow targets Isaac Sim 5.1, PX4 1.16, ROS 2 Humble,
-and the conda environment.
+This repository is the ROS 2 / PX4 / Isaac Sim deployment side for a drone
+point-goal RL policy trained in the sibling `Xsim_new` repository.
 
-<p align="center">
-  <img src="./assets/chaser_racing.gif" alt="Chaser racing" width="32%">
-  <img src="./assets/mpc.gif" alt="MPC demo" width="32%">
-  <img src="./assets/chaser_racing_isaacsim.gif" alt="Chaser racing in Isaac Sim" width="32%">
-</p>
+The current focus is **deploying a trained RL policy into DroneTracking and
+validating fixed point-to-point flight**. The older MPC / MPCC / obstacle
+avoidance stack is still present, but it is secondary for the current workflow.
 
-## Requirements
+## What Is New
 
-- Isaac Sim 5.1 with Pegasus Simulator
-- PX4 1.16 configured in the Pegasus extension
-- ROS 2 Humble on Ubuntu 22.04
-- `px4-ros_ws` overlay available through `tools/simdrone_env.sh`
-- ROS 2 package: `px4_msgs`
-- Optional: QGroundControl at `~/DroneSimulator/QGroundControl-x86_64.AppImage`
+- Added an `rl_hover` FSM behavior that loads a trained `Xsim_new` policy and
+  publishes PX4 body-rate + thrust setpoints.
+- Matched the deployed RL observation to the training observation:
+  - ENU position error is converted to the NED-like frame used by `Xsim_new`.
+  - ENU velocity is converted to the same frame.
+  - PX4 attitude is read from `/fmu/out/vehicle_attitude`.
+  - PX4 body angular velocity is read from `/fmu/out/vehicle_angular_velocity`.
+  - Previous policy action is fed back to the policy.
+- Added a fixed-goal publisher for clean RL point-goal validation.
+- Added an automated fixed-goal test script and log analyzer.
+- Split configs so MPC/OA and RL validation do not conflict.
 
-Load the project environment with:
+## Repository Roles
 
-```bash
-cd ${Path2Project}/DroneTracking
-source ./tools/simdrone_env.sh
-```
-
-## Config
-
-Runtime options are loaded from YAML through `DRONE_TRACKING_CONFIG`.
-
-```bash
-export DRONE_TRACKING_CONFIG=config_0.yaml
-export DRONE_TRACKING_CONFIG=config_1.yaml
-export DRONE_TRACKING_CONFIG=config_oa.yaml
-export DRONE_TRACKING_CONFIG=cfg_visual.yaml
-export DRONE_TRACKING_CONFIG=cfg_lidar.yaml
-```
-
-Relative config names are resolved under `yamls/`; absolute paths also work. If
-unset, `yamls/config_0.yaml` is used.
-
-Built-in configs:
-
-- `config_0.yaml`: default single-vehicle config
-- `config_1.yaml`: namespaced `/px4_1/*` config
-- `config_oa.yaml`: MPC obstacle-avoidance config
-
-## Start Simulation
-
-Recommended launcher:
-
-```bash
-cd ${Path2Project}/DroneTracking
-./tools/simdrone_single.sh
-```
-
-It starts a tmux session with:
-
-- `rviz2 -d tools/layout.rviz`
-- `python isaacsim/tf_tree.py`
-- `isaac_run isaacsim/sim_single.py`
-- `MicroXRCEAgent udp4 -p 8888`
-- QGroundControl
-
-Manual startup:
-
-```bash
-cd ${Path2Project}/DroneTracking
-source ./tools/simdrone_env.sh
-isaac_run isaacsim/sim_single.py
-MicroXRCEAgent udp4 -p 8888
-./QGroundControl-x86_64.AppImage
-```
-
-Waypoint and scene selection:
-
-```bash
-isaac_run isaacsim/sim_single.py --list-tasks
-isaac_run isaacsim/sim_single.py --list-scenes
-isaac_run isaacsim/sim_single.py --task-index 0 --scene-index 0
-```
-
-`sim_single.py` loads waypoint files from `plan2track/waypoints/` and scene files
-from `scenes/*.txt`. Selecting the `behavior1k` scene source loads a USD scene
-from `scenes/behavior1k/` and samples a random spawn point from the occupancy
-map; task selection is skipped for `behavior1k`.
-
-Behavior1k examples:
-
-```bash
-isaac_run isaacsim/sim_single.py --scene-source behavior1k --list-scenes
-isaac_run isaacsim/sim_single.py --scene-source behavior1k --scene-index 0
-```
-
-`tools/simdrone_single.sh` sources `tools/export_mtl.sh` before starting Isaac
-Sim so behavior1k material paths are available.
-
-## Start Controller
-
-Tracking only:
-
-```bash
-cd ${Path2Project}/DroneTracking
-./tools/run_code.sh
-./tools/run_code.sh dronecnt cfg_visual.yaml
-```
-
-Obstacle-avoidance stack:
-
-```bash
-cd ${Path2Project}/DroneTracking
-./tools/run_oa_code.sh
-./tools/run_oa_code.sh dronecnt config_0.yaml
-```
-
-`run_code.sh` starts:
-
-- `python plan2track/plan2track.py`
-- `python -m fsm.fsm_main`
-- `python -m fsm.fsm_interface`
-
-`run_oa_code.sh` starts the same controller panes and additionally starts:
-
-- `python perception/depth2scan.py`
-
-Manual startup:
-
-```bash
-cd ${Path2Project}/DroneTracking
-source ./tools/simdrone_env.sh
-export DRONE_TRACKING_CONFIG=config_0.yaml
-
-python plan2track/plan2track.py
-python -m fsm.fsm_main
-python -m fsm.fsm_interface
-python perception/depth2scan.py --ros-args \
-  -p depth_topic:=/depth \
-  -p scan_topic:=/depth2scan/scan \
-  -p points_topic:=/depth2scan/points \
-  -p frame_id:=drone_fpv_camera \
-  -p config_path:=$PWD/perception/yaml/depth_transform.yaml
-```
-
-## FSM Commands
-
-Use `python -m fsm.fsm_interface` for interactive commands:
-
-- `prepare`
-- `takeoff`
-- `execute`
-- `return`
-- `land`
-- `abort`
-- `help`
-- `state`
-- `quit`
-
-## Planning Data
-
-Waypoint files for tracking live under:
+`Xsim_new` trains and evaluates the RL policy in an empty dynamics environment.
+The checkpoint currently used here is:
 
 ```text
-plan2track/waypoints/
+../Xsim_new/runs/codex_hover_near_stabilize_400k/checkpoints/agent_400000.pt
 ```
 
-Minimum-snap task/control files live under:
+`DroneTracking` runs the deployed stack:
+
+- Isaac Sim / Pegasus for simulation
+- PX4 SITL for the flight stack
+- ROS 2 Humble for topics and control
+- FSM commands: `prepare`, `takeoff`, `execute`, `land`
+- RL or MPC controller output to PX4 body-rate setpoints
+
+## Main Configs
+
+Use `DRONE_TRACKING_CONFIG` or `DRONE_RACING_CONFIG` to select a YAML file under
+`yamls/`.
 
 ```text
-plan2track/tasks/
+yamls/config_rl_goal.yaml  RL fixed point-goal validation
+yamls/config_oa.yaml       MPC obstacle avoidance / keyboard tracking
+yamls/config_0.yaml        Legacy MPCC/default tracking config
 ```
 
-Generate waypoints with:
-
-```bash
-python plan2track/generate_waypoints.py
-```
-
-The selected waypoint file is configured by:
+`config_rl_goal.yaml` is the validated RL deployment config:
 
 ```yaml
+runtime:
+  controller: rl_hover
+
+rl_hover:
+  checkpoint: ../Xsim_new/runs/codex_hover_near_stabilize_400k/checkpoints/agent_400000.pt
+  fallback_to_mpc_tracking: false
+
 tracking:
-  tasks:
-    dir_name: plan2track/waypoints
-    waypoint_file: line_waypoint.txt
+  hocbf:
+    enabled: false
 ```
 
-## Perception
-
-`perception/depth2scan.py` converts a ROS depth image into:
-
-- `sensor_msgs/LaserScan` on `/depth2scan/scan`
-- `sensor_msgs/PointCloud2` on `/depth2scan/points`
-
-The depth conversion config is:
-
-```text
-perception/yaml/depth_transform.yaml
-```
-
-Current assumptions:
-
-- Isaac Sim depth image is `32FC1` in meters
-- horizontal FOV is 90 deg
-- scan bins are angular buckets over the camera horizontal FOV
-- max-range points are published as `inf` in `LaserScan` and are ignored by the
-  obstacle-avoidance controller
-
-## Controllers
-
-The runtime controller is selected by:
+`config_oa.yaml` is intentionally kept as MPC/OA:
 
 ```yaml
 runtime:
   controller: mpc
-  solver: osqp
+
+tracking:
+  hocbf:
+    enabled: true
 ```
 
-Supported controller families:
+Do not use keyboard velocity commands to evaluate the current RL policy.
+Keyboard mode creates a moving target, while the trained policy should be tested
+as a fixed point-goal controller.
 
-- `mpc`: OSQP tracking MPC
-- `mpcc`: MPCC tracker
+## Start the Simulator
 
-When `tracking.hocbf.enabled` is true and depth scan points are available, the
-MPC path tracker adds HOCBF obstacle-avoidance constraints. Without valid depth
-scan points, it behaves as the normal tracking MPC.
+On the server:
 
-Relevant YAML sections:
+```bash
+cd /root/gpufree-data/devspace/drone/DroneTracking
+SIM_SCENE_SOURCE=behavior1k SIM_SCENE_INDEX=0 ./tools/simdrone_single.sh
+```
 
-- `runtime`: controller and solver selection
-- `fsm`: FSM topics, logging, takeoff velocity, and auto-land thresholds
-- `plan2track`: path topics, waypoint loading mode, loop mode, fixed yaw, and `init_yaw`
-- `tracking_ros`: PX4 ROS topics, target system, and `pub_offboard`
-- `tracking.tasks`: waypoint file selection under `plan2track/waypoints`
-- `tracking.mpc`: horizon, timestep, and reference speed
-- `tracking.control`: controller timer period
-- `tracking.yaw`: yaw gain and yaw-rate limit
-- `tracking.ctbr`: body-rate/thrust conversion parameters
-- `tracking.accel_fusion`: acceleration smoothing
-- `tracking.constraints`: MPC state/input bounds
-- `tracking.mpc_cost`: MPC cost weights
-- `tracking.mpcc_cost`: MPCC cost weights
-- `tracking.hocbf`: depth scan topic, camera offset, safety radius, gains, and slack weight
+Useful simulator variables:
 
-## Coordinate Notes
+```bash
+SIM_SCENE_SOURCE=behavior1k
+SIM_SCENE_INDEX=0
+SIM_TASK_INDEX=0
+SIM_SPAWN_CLEARANCE=1.0
+SIM_SPAWN_SEED=123
+```
 
-- Isaac Sim uses an ENU world frame.
-- Waypoint text files are loaded as NED and converted to ENU by planning and
-  simulation utilities.
-- `origin_mode: fixed` keeps the waypoint-file origin fixed.
-- `origin_mode: first_xy` shifts the path so the first waypoint has local
-  `x/y = 0/0`.
-- `fixed_yaw: true` publishes `init_yaw` as the yaw command.
-- `fixed_yaw: false` publishes path-tangent yaw.
+If Behavior1K is not needed, omit `SIM_SCENE_SOURCE` and `SIM_SCENE_INDEX`.
 
-## Key Files
+## Run RL Fixed-Goal Validation
 
-- `isaacsim/sim_single.py`: single-vehicle Isaac Sim app
-- `isaacsim/sim_utils.py`: scene, waypoint marker, and behavior1k helpers
-- `isaacsim/tf_tree.py`: ROS TF tree publisher
-- `plan2track/plan2track.py`: waypoint/path bridge for MPC/MPCC tracking
-- `plan2track/generate_waypoints.py`: minimum-snap waypoint generation helper
-- `perception/depth2scan.py`: depth image to pseudo LaserScan converter
-- `tracking/tracking_cnt.py`: controller step, CTBR conversion, and yaw-rate logic
-- `tracking/tracking_osqp.py`: OSQP MPC/HOCBF solver implementation
-- `tracking/tracking_ros.py`: PX4 ROS message bridge
-- `fsm/fsm_main.py`: FSM node startup
-- `fsm/fsm_node.py`: FSM ROS node and transition coordinator
-- `fsm/fsm_mpc.py`: MPC/MPCC behavior and tracker command publication
-- `fsm/fsm_interface.py`: interactive FSM terminal
-- `yamls/config.py`: YAML config loader
-- `yamls/*.yaml`: runtime configs
+In another terminal:
+
+```bash
+cd /root/gpufree-data/devspace/drone/DroneTracking
+./tools/run_fixed_goal_test.sh
+```
+
+The script:
+
+1. Starts the controller tmux session.
+2. Sends `prepare`.
+3. Sends `takeoff`.
+4. Sends `execute`.
+5. Publishes one fixed goal.
+6. Waits for tracking.
+7. Analyzes the latest FSM log.
+
+Default goal:
+
+```text
+goal = position_at_execute + ENU(1.0, 0.0, 0.0)
+goal_z = 1.0
+```
+
+Try farther goals:
+
+```bash
+FIXED_GOAL_OFFSET_ENU=2.0,0,0 ./tools/run_fixed_goal_test.sh
+FIXED_GOAL_OFFSET_ENU=3.0,0,0 EXECUTE_S=40 ./tools/run_fixed_goal_test.sh
+FIXED_GOAL_OFFSET_ENU=2.0,2.0,0 EXECUTE_S=40 ./tools/run_fixed_goal_test.sh
+```
+
+Expected analyzer output for a good 1m run:
+
+```text
+final_err=0.0570
+final_speed=0.0121
+tail_err_mean=0.0591
+tail_speed_mean=0.0085
+verdict=PASS
+```
+
+The analyzer currently marks a run as `PASS` when:
+
+```text
+tail_err_mean <= 0.30 m
+tail_speed_mean <= 0.25 m/s
+```
+
+You can also run the analyzer manually:
+
+```bash
+python3 tools/analyze_rl_goal_log.py --window 300
+```
+
+## Run Legacy MPC / OA
+
+For the older MPC obstacle-avoidance stack:
+
+```bash
+cd /root/gpufree-data/devspace/drone/DroneTracking
+export DRONE_RACING_CONFIG=config_oa.yaml
+PLAN2TRACK_MODE=keyboard ./tools/run_oa_code.sh
+```
+
+This mode is useful for keyboard-generated references and MPC/HOCBF tracking,
+not for judging the current RL point-goal policy.
+
+## Important Files
+
+```text
+fsm/fsm_rl_hover.py              RL policy loader and PX4 CTBR adapter
+fsm/fsm_node.py                  FSM ROS node, PX4 state subscriptions
+fsm/fsm_ros.py                   PX4 message conversion helpers
+plan2track/fixed_goal2track.py   Fixed-goal publisher for RL validation
+tools/run_fixed_goal_test.sh     Automated RL fixed-goal test
+tools/analyze_rl_goal_log.py     Log summary and PASS/CHECK verdict
+tools/run_oa_code.sh             Controller launcher, keyboard or fixed-goal mode
+tools/simdrone_single.sh         Simulator launcher
+yamls/config_rl_goal.yaml        RL point-goal config
+yamls/config_oa.yaml             MPC/OA config
+docs/rl_point_goal_runbook.md    Detailed setup and validation notes
+```
+
+## Stop Sessions
+
+```bash
+tmux kill-session -t dronecnt
+tmux kill-session -t dronesim
+```
+
+`dronecnt` is the controller session. `dronesim` is the simulator session.

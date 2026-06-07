@@ -9,6 +9,7 @@ Startup flow (interactive):
 """
 
 from pathlib import Path
+import os
 
 import numpy as np
 from scipy.spatial.transform import Rotation
@@ -47,6 +48,9 @@ class PegasusApp:
         self.timeline = omni.timeline.get_timeline_interface()
 
         self.pg = PegasusInterface()
+        px4_path = os.environ.get("PX4_PATH", "").strip()
+        if px4_path:
+            self.pg.set_px4_path(px4_path)
         self.pg._world = World(**self.pg._world_settings)
         self.world = self.pg.world
         self.pg.load_environment(SIMULATION_ENVIRONMENTS["Flat Plane"])

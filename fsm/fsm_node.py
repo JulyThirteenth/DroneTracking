@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 from nav_msgs.msg import Path as NavPath
-from px4_msgs.msg import VehicleLocalPosition
+from px4_msgs.msg import VehicleAngularVelocity, VehicleAttitude, VehicleLocalPosition
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Float32, String
 
@@ -10,8 +10,12 @@ from .fsm_core import Event, FiniteStateMachine
 from .fsm_main import AutoLandMonitor, behavior_creater
 from .fsm_ros import (
     VehicleState,
+    TOPIC_VEHICLE_ANGULAR_VELOCITY,
+    TOPIC_VEHICLE_ATTITUDE,
     derive_info_topic,
     latched_qos,
+    body_rates_from_angular_velocity,
+    quat_from_vehicle_attitude,
     path_msg_points_enu,
     scan_msg_points_enu,
     vehicle_state_from_local_position,
@@ -32,6 +36,7 @@ from yamls.config import get_cfg
 _CFG = get_cfg()
 _MPC = "mpc"
 _MPCC = "mpcc"
+_RL_HOVER = "rl_hover"
 
 
 class DroneFSMNode(FSMNodeBase):
@@ -55,6 +60,8 @@ class DroneFSMNode(FSMNodeBase):
         self._solver = str(solver).lower().strip()
         self._init_yaw_enu = float(_CFG.plan2track.init_yaw)
         self._vehicle_state: VehicleState | None = None
+        self._body_rates: np.ndarray | None = None
+        self._quat_wxyz: np.ndarray | None = None
         self._tracking_points_enu: np.ndarray | None = None
         self._latest_scan: LaserScan | None = None
         self._auto_land = AutoLandMonitor.from_fsm_cfg(self._fsm_cfg)
@@ -74,10 +81,22 @@ class DroneFSMNode(FSMNodeBase):
             self._on_local_position,
             qos_px4_out,
         )
+        self.create_subscription(
+            VehicleAngularVelocity,
+            TOPIC_VEHICLE_ANGULAR_VELOCITY,
+            self._on_angular_velocity,
+            qos_px4_out,
+        )
+        self.create_subscription(
+            VehicleAttitude,
+            TOPIC_VEHICLE_ATTITUDE,
+            self._on_attitude,
+            qos_px4_out,
+        )
 
         tracking_topic = (
             str(self._fsm_cfg.ref_path_topic)
-            if self._controller == _MPC
+            if self._controller in {_MPC, _RL_HOVER}
             else str(self._fsm_cfg.path_topic)
         )
         self.create_subscription(NavPath, tracking_topic, self._on_tracking_path, 10)
@@ -85,7 +104,7 @@ class DroneFSMNode(FSMNodeBase):
         self.get_logger().info(f"Subscribed yaw_cmd: {_CFG.plan2track.yaw_cmd_topic}")
 
         hocbf = self._tracking_cfg.hocbf
-        self._use_depth_obstacles = self._controller == _MPC and bool(hocbf.enabled)
+        self._use_depth_obstacles = self._controller in {_MPC, _RL_HOVER} and bool(hocbf.enabled)
         if self._use_depth_obstacles:
             self._depth_camera_xyz = np.asarray(hocbf.depth_camera_xyz, dtype=float).reshape(3)
             self._obstacle_min_radius_m = float(hocbf.obstacle_min_radius_m)
@@ -143,11 +162,25 @@ class DroneFSMNode(FSMNodeBase):
         self._behavior.update_yaw_cmd_enu(yaw_cmd)
 
     def _on_local_position(self, msg: VehicleLocalPosition) -> None:
-        state = vehicle_state_from_local_position(msg)
+        state = vehicle_state_from_local_position(
+            msg,
+            body_rates=self._body_rates,
+            quat_wxyz=self._quat_wxyz,
+        )
         if state is None:
             return
         self._vehicle_state = state
         self._behavior.update_vehicle_state(state)
+
+    def _on_angular_velocity(self, msg: VehicleAngularVelocity) -> None:
+        rates = body_rates_from_angular_velocity(msg)
+        if rates is not None:
+            self._body_rates = rates
+
+    def _on_attitude(self, msg: VehicleAttitude) -> None:
+        quat = quat_from_vehicle_attitude(msg)
+        if quat is not None:
+            self._quat_wxyz = quat
 
     def _on_scan(self, msg: LaserScan) -> None:
         self._latest_scan = msg

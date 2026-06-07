@@ -55,6 +55,9 @@ class PegasusApp:
 
         # Start the Pegasus Interface
         self.pg = PegasusInterface()
+        px4_path = os.environ.get("PX4_PATH", "").strip()
+        if px4_path:
+            self.pg.set_px4_path(px4_path)
 
         # Acquire the World, .i.e, the singleton that controls that is a one stop shop for setting up physics,
         # spawning asset primitives, etc.

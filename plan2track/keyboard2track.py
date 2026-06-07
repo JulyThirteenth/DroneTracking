@@ -80,7 +80,8 @@ class Keyboard2TrackNode(Node):
         self._load_params()
 
         self._position_enu: np.ndarray | None = None
-        self._yaw_cmd_enu = float(self._cfg.plan2track.init_yaw)
+        self._init_yaw_enu = float(self._cfg.plan2track.init_yaw)
+        self._yaw_cmd_enu = self._init_yaw_enu
         self._speed = 0.0
         self._yaw_rate = 0.0
         self._fsm_state = ""
@@ -109,6 +110,7 @@ class Keyboard2TrackNode(Node):
         self._yaw_rate_step = self._param_float("yaw_rate_step", 0.1)
         self._linear_min = self._param_float("linear_min", 0.0)
         self._linear_max = self._param_float("linear_max", mpc.v_ref)
+        self._fixed_yaw = bool(getattr(cfg.plan2track, "fixed_yaw", False))
         self._yaw_rate_limit = self._param_float(
             "yaw_rate_limit",
             1.0 if yaw.yaw_rate_limit is None else yaw.yaw_rate_limit,
@@ -167,7 +169,7 @@ class Keyboard2TrackNode(Node):
     def _on_vehicle_state(self, msg: VehicleLocalPosition) -> None:
         self._position_enu = ned_to_enu([msg.x, msg.y, msg.z])
         heading = float(getattr(msg, "heading", np.nan))
-        if np.isfinite(heading) and not self._manual_yaw:
+        if np.isfinite(heading) and not self._manual_yaw and not self._fixed_yaw:
             self._yaw_cmd_enu = yaw_ned_to_enu(heading)
 
     def _on_fsm_state(self, msg: String) -> None:
@@ -189,6 +191,9 @@ class Keyboard2TrackNode(Node):
         self._print_status()
 
     def _update_yaw_cmd(self) -> None:
+        if self._fixed_yaw and not self._manual_yaw:
+            self._yaw_cmd_enu = self._init_yaw_enu
+            return
         self._yaw_cmd_enu = wrap_pi(
             self._yaw_cmd_enu + self._yaw_rate * self._publish_dt
         )
@@ -261,6 +266,9 @@ class Keyboard2TrackNode(Node):
     def _stop(self) -> None:
         self._speed = 0.0
         self._yaw_rate = 0.0
+        if self._fixed_yaw:
+            self._manual_yaw = False
+            self._yaw_cmd_enu = self._init_yaw_enu
 
     def _print_status(self) -> None:
         target = self._target_text()

@@ -31,6 +31,7 @@ def _deep_update(base: dict[str, Any], override: dict[str, Any]) -> dict[str, An
 def resolve_config_path() -> Path:
     raw = (
         os.environ.get("DRONE_TRACKING_CONFIG", "")
+        or os.environ.get("DRONE_RACING_CONFIG", "")
         or DEFAULT_CONFIG_FILE
     ).strip()
     if not raw:
@@ -98,12 +99,27 @@ class TrackingRosConfig:
 
 
 @dataclass(frozen=True)
+class RLHoverConfig:
+    checkpoint: str
+    device: str
+    thrust_ratio_min: float
+    thrust_ratio_max: float
+    body_rate_limit: tuple[float, float, float]
+    hover_thrust: float
+    thrust_min: float
+    thrust_max: float
+    max_position_error: float
+    fallback_to_mpc_tracking: bool
+
+
+@dataclass(frozen=True)
 class ProjectConfig:
     config_path: Path
     runtime: RuntimeConfig
     fsm: FsmConfig
     plan2track: Plan2TrackConfig
     tracking_ros: TrackingRosConfig
+    rl_hover: RLHoverConfig
     tracking: dict[str, Any]
 
 
@@ -147,6 +163,18 @@ _TRACKING_ROS_DEFAULTS = {
     "target_system": 1,
     "pub_offboard": True,
 }
+_RL_HOVER_DEFAULTS = {
+    "checkpoint": "",
+    "device": "cpu",
+    "thrust_ratio_min": 0.4,
+    "thrust_ratio_max": 1.6,
+    "body_rate_limit": [1.5, 1.5, 1.0],
+    "hover_thrust": 0.58,
+    "thrust_min": 0.1,
+    "thrust_max": 0.9,
+    "max_position_error": 4.0,
+    "fallback_to_mpc_tracking": True,
+}
 
 
 def _section(config: dict[str, Any], name: str, defaults: dict[str, Any]) -> dict[str, Any]:
@@ -164,6 +192,9 @@ def get_cfg() -> ProjectConfig:
     fsm = FsmConfig(**_section(data, "fsm", _FSM_DEFAULTS))
     plan2track = Plan2TrackConfig(**_section(data, "plan2track", _PLAN2TRACK_DEFAULTS))
     tracking_ros = TrackingRosConfig(**_section(data, "tracking_ros", _TRACKING_ROS_DEFAULTS))
+    rl_hover_data = _section(data, "rl_hover", _RL_HOVER_DEFAULTS)
+    rl_hover_data["body_rate_limit"] = tuple(rl_hover_data["body_rate_limit"])
+    rl_hover = RLHoverConfig(**rl_hover_data)
     tracking = _section(data, "tracking", {})
 
     return ProjectConfig(
@@ -172,5 +203,6 @@ def get_cfg() -> ProjectConfig:
         fsm=fsm,
         plan2track=plan2track,
         tracking_ros=tracking_ros,
+        rl_hover=rl_hover,
         tracking=tracking,
     )
