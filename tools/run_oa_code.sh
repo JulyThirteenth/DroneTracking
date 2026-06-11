@@ -43,10 +43,10 @@ tmux send-keys -t "${P_PLAN}" \
 "cd \"${PROJECT_DIR}\" && source ./tools/simdrone_env.sh && ${ENV_PREFIX}python plan2track/keyboard2track.py" C-m
 
 tmux send-keys -t "${P_FSM_NODE}" \
-"cd \"${PROJECT_DIR}\" && source ./tools/simdrone_env.sh && ${ENV_PREFIX}python fsm/fsm_node.py" C-m
+"cd \"${PROJECT_DIR}\" && source ./tools/simdrone_env.sh && ${ENV_PREFIX}python -m fsm.fsm_main" C-m
 
 tmux send-keys -t "${P_FSM_APP}" \
-"cd \"${PROJECT_DIR}\" && source ./tools/simdrone_env.sh && ${ENV_PREFIX}python fsm/fsm_app.py" C-m
+"cd \"${PROJECT_DIR}\" && source ./tools/simdrone_env.sh && ${ENV_PREFIX}python -m fsm.fsm_interface" C-m
 
 tmux send-keys -t "${P_BOTTOM}" \
 "cd \"${PROJECT_DIR}\" && source ./tools/simdrone_env.sh && python perception/depth2scan.py --ros-args -p depth_topic:=\"${DEPTH_TOPIC}\" -p scan_topic:=\"${DEPTH_SCAN_TOPIC}\" -p points_topic:=\"${DEPTH_POINTS_TOPIC}\" -p frame_id:=\"${DEPTH_FRAME_ID}\" -p config_path:=\"${DEPTH_SCAN_CONFIG}\"" C-m

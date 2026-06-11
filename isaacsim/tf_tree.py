@@ -21,7 +21,7 @@ from px4_msgs.msg import VehicleLocalPosition
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
-
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
@@ -32,7 +32,6 @@ from tracking.tracking_utils import (
     wrap_pi,
     yaw_ned_to_enu,
 )
-from tracking.tracking_ros import qos_px4_out
 from yamls.config import get_cfg
 
 
@@ -45,9 +44,9 @@ class DroneTfTreeNode(Node):
         cfg = get_cfg()
         self.declare_parameter(
             "vehicle_local_position_topic",
-            cfg.tracking_ros.vehicle_local_position_topic,
+            cfg.topics.px4.vehicle_local_position,
         )
-        self.declare_parameter("world_frame", cfg.plan2track.frame_id)
+        self.declare_parameter("world_frame", cfg.plan2track.path.frame_id)
         self.declare_parameter("body_frame", "base_link")
         self.declare_parameter("camera_frame", "drone_fpv_camera")
         self.declare_parameter("camera_xyz", [0.1, 0.0, 0.02])
@@ -69,7 +68,12 @@ class DroneTfTreeNode(Node):
             VehicleLocalPosition,
             self._local_position_topic,
             self._on_local_position,
-            qos_px4_out,
+            QoSProfile(
+                reliability=ReliabilityPolicy.BEST_EFFORT,
+                durability=DurabilityPolicy.VOLATILE,
+                history=HistoryPolicy.KEEP_LAST,
+                depth=10,
+            ),
         )
 
         self._publish_camera_static_tf()

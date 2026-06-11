@@ -1,54 +1,75 @@
 runtime:
-  controller: mpc
+  controller: mpcc
   solver: osqp
 
-fsm:
-  cmd_topic: /fsm/cmd
-  state_topic: /fsm/state
-  path_topic: /tracking/path
-  ref_path_topic: /tracking/ref_traj_path
-  log_dir: ""
-  log_enabled: true
-  log_flush_every: 1
-  takeoff_velocity: 0.4
-  takeoff_height: 1.0
-  auto_land: True
-  auto_land_distance: 0.1
-  auto_land_velocity: 0.1
-  auto_land_hold_cycles: 20
+topics:
+  fsm:
+    cmd: /fsm/cmd
+    state: /fsm/state
+  planning:
+    path: /planning/path
+    yaw_cmd_enu: /planning/yaw_cmd_enu
+  tracking:
+    path: /tracking/path
+    ref_traj_path: /tracking/ref_traj_path
+    vehicle_pose: /tracking/vehicle_pose
+  px4:
+    offboard_control_mode: /fmu/in/offboard_control_mode
+    vehicle_rates_setpoint: /fmu/in/vehicle_rates_setpoint
+    vehicle_command: /fmu/in/vehicle_command
+    vehicle_local_position: /fmu/out/vehicle_local_position
+  perception:
+    scan: /depth2scan/scan
 
-plan2track:
-  path_topic: /planning/path
-  ref_path_topic: /tracking/ref_traj_path
-  out_path_topic: /tracking/path
-  vehicle_pose_topic: /tracking/vehicle_pose
-  yaw_cmd_topic: /planning/yaw_cmd_enu
-  fixed_yaw: false
-  init_yaw: 0.0
-
-  path_file: ""
-  origin_mode: first_xy
-  frame_id: map
-  loop: false
-
-tracking_ros:
-  offboard_control_mode_topic: /fmu/in/offboard_control_mode
-  vehicle_rates_setpoint_topic: /fmu/in/vehicle_rates_setpoint
-  vehicle_command_topic: /fmu/in/vehicle_command
-  vehicle_local_position_topic: /fmu/out/vehicle_local_position
+vehicle:
   target_system: 1
   pub_offboard: true
 
+fsm:
+  log:
+    dir: ""
+    enabled: true
+    flush_every: 1
+  takeoff:
+    velocity: 0.4
+    height: 1.0
+  auto_land:
+    enabled: true
+    distance: 0.1
+    velocity: 0.1
+    hold_cycles: 20
+
+plan2track:
+  path:
+    file: plan2track/waypoints/comp_waypoint_1.txt
+    origin_mode: first_xy
+    frame_id: map
+    loop: false
+  yaw:
+    fixed: false
+    init: 0.0
+
 tracking:
-  tasks:
-    dir_name: plan2track/waypoints
-    waypoint_file: comp_waypoint_1.txt
+  control_loop:
+    dt: 0.01
   mpc:
     dt: 0.1
     horizon: 15
     v_ref: 3.0
-  control:
-    dt: 0.01
+    cost:
+      Q_diag: [2000.0, 2000.0, 2000.0]
+      R_diag: [0.0, 0.0, 0.0]
+      Rd_diag: [0.2, 0.2, 0.2]
+      terminal: 1.0
+  mpcc:
+    cost:
+      q_contour: 500.0
+      q_lag: 2.0
+      q_progress: 1.0
+      q_terminal_s: 10.0
+    progress:
+      vs_max: 2.0
+      vs_min: 0.0
   yaw:
     kp: 0.04
     yaw_rate_limit: 1.57
@@ -70,15 +91,3 @@ tracking:
     a_max: [10.0, 10.0, 10.0]
     v_slack_weight: 10000.0
     a_slack_weight: 10000.0
-  mpc_cost:
-    Q_diag: [2000.0, 2000.0, 2000.0]
-    R_diag: [0.0, 0.0, 0.0]
-    Rd_diag: [0.2, 0.2, 0.2]
-    terminal: 1.0
-  mpcc_cost:
-    q_contour: 500.0
-    q_lag: 2.0
-    q_progress: 1.0
-    q_terminal_s: 10.0
-    vs_max: 1.0
-    vs_min: 0.0
