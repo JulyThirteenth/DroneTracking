@@ -11,8 +11,6 @@ from tracking.tracking_utils import (
     sample_polyline_with_tangent,
 )
 
-_SOLVED_STATUSES = {"solved", "solved inaccurate"}
-
 
 @dataclass(frozen=True)
 class HOCBFConfig:
@@ -57,6 +55,270 @@ def uav_jerk_discrete_matrices(dt: float) -> tuple[np.ndarray, np.ndarray]:
     return A, B
 
 
+class OSQPInterface:
+    def __init__(self, name: str):
+        self.name = str(name)
+        self.solver = None
+        self.solver_times: list[float] = []
+
+    @property
+    def ready(self) -> bool:
+        return self.solver is not None
+
+    @staticmethod
+    def sparse_module(name: str):
+        try:
+            import scipy.sparse as sp
+        except ModuleNotFoundError as exc:
+            raise ModuleNotFoundError(f"{name} requires `scipy`.") from exc
+        return sp
+
+    def setup(self, *, P, q, A, l, u, **settings) -> None:
+        try:
+            import osqp
+        except ModuleNotFoundError as exc:
+            raise ModuleNotFoundError(f"{self.name} requires `osqp`.") from exc
+
+        opts = {"verbose": False, "warm_start": True}
+        opts.update(settings)
+        self.solver = osqp.OSQP()
+        self.solver.setup(P=P, q=q, A=A, l=l, u=u, **opts)
+
+    def solve(
+        self,
+        *,
+        q,
+        l,
+        u,
+        warm_start=None,
+        Px=None,
+        Ax=None,
+        log: bool = False,
+    ) -> np.ndarray:
+        if self.solver is None:
+            raise RuntimeError("Call setup() before solve().")
+
+        update = {"q": q, "l": l, "u": u}
+        if Px is not None:
+            update["Px"] = Px
+        if Ax is not None:
+            update["Ax"] = Ax
+        self.solver.update(**update)
+        if warm_start is not None:
+            self.solver.warm_start(x=warm_start)
+
+        t0 = time.perf_counter()
+        res = self.solver.solve()
+        dt_s = time.perf_counter() - t0
+        self.solver_times.append(dt_s)
+
+        if log:
+            print(
+                f"solver time: {dt_s:.6f}s, "
+                f"max: {max(self.solver_times):.6f}s, "
+                f"mean: {float(np.mean(self.solver_times)):.6f}s, "
+                f"status: {res.info.status}"
+            )
+
+        status = str(res.info.status).lower()
+        if status not in {"solved", "solved inaccurate"} or res.x is None:
+            raise RuntimeError(f"OSQP failed: {res.info.status}")
+        return np.asarray(res.x, dtype=float).reshape(-1)
+
+
+class OSQPProblemBase:
+    def __init__(self, name: str, params):
+        self.params = params
+        self._osqp = OSQPInterface(name)
+        self._idx = None
+        self._l_base: np.ndarray | None = None
+        self._u_base: np.ndarray | None = None
+        self._l_var: np.ndarray | None = None
+        self._u_var: np.ndarray | None = None
+        self._rows_x0: slice | None = None
+        self._rows_du0: slice | None = None
+
+    def _dims(self, name: str):
+        p = self.params
+        nx = int(getattr(p, "nx"))
+        nu = int(getattr(p, "nu"))
+        N = int(getattr(p, "horizon"))
+        dt = float(getattr(p, "dt"))
+        if nx != 9 or nu != 3:
+            raise ValueError(f"{name} supports nx=9, nu=3 (UAV p,v,a + jerk).")
+        return p, nx, nu, N, dt
+
+    def _has_v_bounds(self) -> bool:
+        p = self.params
+        return getattr(p, "v_min", None) is not None and getattr(p, "v_max", None) is not None
+
+    def _has_a_bounds(self) -> bool:
+        p = self.params
+        return getattr(p, "a_min", None) is not None and getattr(p, "a_max", None) is not None
+
+    @staticmethod
+    def _add_input_cost(P: np.ndarray, idx, N: int, R: np.ndarray, Rd: np.ndarray) -> None:
+        for k in range(N):
+            P[idx.u(k), idx.u(k)] += 2.0 * R
+        for k in range(N - 1):
+            uk = idx.u(k)
+            uk1 = idx.u(k + 1)
+            P[uk, uk] += 2.0 * Rd
+            P[uk1, uk1] += 2.0 * Rd
+            P[uk, uk1] += -2.0 * Rd
+            P[uk1, uk] += -2.0 * Rd
+        P[idx.u(0), idx.u(0)] += 2.0 * Rd
+
+    def _add_soft_cost(self, P: np.ndarray, idx, N: int, *, have_v: bool, have_a: bool) -> None:
+        p = self.params
+        if have_v:
+            w = float(getattr(p, "v_slack_weight"))
+            for k in range(N + 1):
+                P[idx.sv(k), idx.sv(k)] += 2.0 * w * np.eye(3)
+        if have_a:
+            w = float(getattr(p, "a_slack_weight"))
+            for k in range(N + 1):
+                P[idx.sa(k), idx.sa(k)] += 2.0 * w * np.eye(3)
+
+    def _add_dynamics(self, rows, l, u, idx, *, nx: int, N: int, nvar: int, dt: float) -> None:
+        A_d, B_d = uav_jerk_discrete_matrices(dt)
+        for k in range(N):
+            Ak = np.zeros((nx, nvar), dtype=float)
+            Ak[:, idx.x(k + 1)] = np.eye(nx)
+            Ak[:, idx.x(k)] = -A_d
+            Ak[:, idx.u(k)] = -B_d
+            rows.append(Ak)
+            l.append(np.zeros(nx))
+            u.append(np.zeros(nx))
+
+    def _add_du_constraints(self, rows, l, u, idx, *, nu: int, N: int, nvar: int, dt: float) -> slice | None:
+        p = self.params
+        if getattr(p, "du_min", None) is None or getattr(p, "du_max", None) is None:
+            return None
+        du_min = np.asarray(getattr(p, "du_min"), dtype=float).reshape(nu)
+        du_max = np.asarray(getattr(p, "du_max"), dtype=float).reshape(nu)
+        lb_du = dt * du_min
+        ub_du = dt * du_max
+
+        for k in range(N - 1):
+            Ak = np.zeros((nu, nvar), dtype=float)
+            Ak[:, idx.u(k + 1)] = np.eye(nu)
+            Ak[:, idx.u(k)] = -np.eye(nu)
+            rows.append(Ak)
+            l.append(lb_du)
+            u.append(ub_du)
+
+        Ak = np.zeros((nu, nvar), dtype=float)
+        Ak[:, idx.u(0)] = np.eye(nu)
+        start = sum(r.shape[0] for r in rows)
+        rows.append(Ak)
+        l.append(lb_du)
+        u.append(ub_du)
+        return slice(start, start + nu)
+
+    def _add_soft_constraints(self, rows, l, u, idx, *, N: int, nvar: int, have_v: bool, have_a: bool) -> None:
+        p = self.params
+        if have_v:
+            v_min = np.asarray(getattr(p, "v_min"), dtype=float).reshape(3)
+            v_max = np.asarray(getattr(p, "v_max"), dtype=float).reshape(3)
+            for k in range(N + 1):
+                xk = idx.x(k)
+                Ak = np.zeros((3, nvar), dtype=float)
+                Ak[:, xk.start + 3 : xk.start + 6] = np.eye(3)
+                Ak[:, idx.sv(k)] = np.eye(3)
+                rows.append(Ak)
+                l.append(v_min)
+                u.append(np.full(3, np.inf))
+
+                Ak = np.zeros((3, nvar), dtype=float)
+                Ak[:, xk.start + 3 : xk.start + 6] = np.eye(3)
+                Ak[:, idx.sv(k)] = -np.eye(3)
+                rows.append(Ak)
+                l.append(np.full(3, -np.inf))
+                u.append(v_max)
+
+        if have_a:
+            a_min = np.asarray(getattr(p, "a_min"), dtype=float).reshape(3)
+            a_max = np.asarray(getattr(p, "a_max"), dtype=float).reshape(3)
+            for k in range(N + 1):
+                xk = idx.x(k)
+                Ak = np.zeros((3, nvar), dtype=float)
+                Ak[:, xk.start + 6 : xk.start + 9] = np.eye(3)
+                Ak[:, idx.sa(k)] = np.eye(3)
+                rows.append(Ak)
+                l.append(a_min)
+                u.append(np.full(3, np.inf))
+
+                Ak = np.zeros((3, nvar), dtype=float)
+                Ak[:, xk.start + 6 : xk.start + 9] = np.eye(3)
+                Ak[:, idx.sa(k)] = -np.eye(3)
+                rows.append(Ak)
+                l.append(np.full(3, -np.inf))
+                u.append(a_max)
+
+    def _var_bounds(self, idx, *, nvar: int, nu: int, N: int, have_v: bool, have_a: bool):
+        p = self.params
+        l_var = np.full(nvar, -np.inf, dtype=float)
+        u_var = np.full(nvar, np.inf, dtype=float)
+        if getattr(p, "u_min", None) is not None and getattr(p, "u_max", None) is not None:
+            u_min = np.asarray(getattr(p, "u_min"), dtype=float).reshape(nu)
+            u_max = np.asarray(getattr(p, "u_max"), dtype=float).reshape(nu)
+            for k in range(N):
+                l_var[idx.u(k)] = u_min
+                u_var[idx.u(k)] = u_max
+        if have_v:
+            for k in range(N + 1):
+                l_var[idx.sv(k)] = 0.0
+        if have_a:
+            for k in range(N + 1):
+                l_var[idx.sa(k)] = 0.0
+        return l_var, u_var
+
+    @staticmethod
+    def _stack_rows(rows, l, u, nvar: int):
+        return (
+            np.vstack(rows) if rows else np.zeros((0, nvar), dtype=float),
+            np.concatenate(l) if l else np.zeros(0, dtype=float),
+            np.concatenate(u) if u else np.zeros(0, dtype=float),
+        )
+
+    @staticmethod
+    def _shift_xu_warmstart(x_ws, u_ws, *, nx: int, nu: int, N: int):
+        x_ws = np.asarray(x_ws, dtype=float).reshape(nx, N + 1)
+        u_ws = np.asarray(u_ws, dtype=float).reshape(nu, N)
+        x_ws = np.hstack([x_ws[:, 1:], x_ws[:, -1:]])
+        u_ws = np.hstack([u_ws[:, 1:], u_ws[:, -1:]]) if N > 1 else u_ws.copy()
+        return x_ws, u_ws
+
+    def _bounds_for_state_and_du(self, x0: np.ndarray, u0: np.ndarray, *, nu: int, dt: float):
+        p = self.params
+        l_base = np.array(self._l_base, copy=True)
+        u_base = np.array(self._u_base, copy=True)
+        l_base[self._rows_x0] = x0
+        u_base[self._rows_x0] = x0
+
+        if (
+            self._rows_du0 is not None
+            and getattr(p, "du_min", None) is not None
+            and getattr(p, "du_max", None) is not None
+        ):
+            du_min = np.asarray(getattr(p, "du_min"), dtype=float).reshape(nu)
+            du_max = np.asarray(getattr(p, "du_max"), dtype=float).reshape(nu)
+            l_base[self._rows_du0] = u0 + dt * du_min
+            u_base[self._rows_du0] = u0 + dt * du_max
+        return l_base, u_base
+
+    @staticmethod
+    def _extract_xu(z, idx):
+        x_sol = np.zeros((idx.nx, idx.N + 1), dtype=float)
+        u_sol = np.zeros((idx.nu, idx.N), dtype=float)
+        for k in range(idx.N + 1):
+            x_sol[:, k] = z[idx.x(k)]
+        for k in range(idx.N):
+            u_sol[:, k] = z[idx.u(k)]
+        return x_sol, u_sol
+
+
 @dataclass(frozen=True)
 class _Idx:
     nx: int
@@ -95,7 +357,7 @@ class _Idx:
         return slice(s, s + 3)
 
 
-class MPCOSQP:
+class MPCOSQP(OSQPProblemBase):
     """
     OSQP-based solver for the convex QP form of `tracking_opt.MPC`.
 
@@ -104,20 +366,8 @@ class MPCOSQP:
     """
 
     def __init__(self, params, cbf=None):
-        self.params = params
+        super().__init__("MPCOSQP", params)
         self.cbf = cbf
-        self.solver_times: list[float] = []
-
-        self._idx: _Idx | None = None
-        self._solver = None
-
-        self._l_base: np.ndarray | None = None
-        self._u_base: np.ndarray | None = None
-        self._l_var: np.ndarray | None = None
-        self._u_var: np.ndarray | None = None
-
-        self._rows_x0: slice | None = None
-        self._rows_du0: slice | None = None
         self._rows_cbf: slice | None = None
         self._cbf_slack0: int | None = None
         self._nvar: int | None = None
@@ -125,28 +375,18 @@ class MPCOSQP:
         self._A_pos: dict[tuple[int, int], int] = {}
 
     def setup(self):
-        try:
-            import osqp  # noqa: F401
-            import scipy.sparse as sp  # noqa: F401
-        except ModuleNotFoundError as exc:
-            raise ModuleNotFoundError("MPCOSQP requires `osqp` and `scipy`.") from exc
-
-        p = self.params
-        if int(getattr(p, "nx")) != 9 or int(getattr(p, "nu")) != 3:
-            raise ValueError("MPCOSQP supports nx=9, nu=3 (UAV p,v,a + jerk).")
-
-        N = int(getattr(p, "horizon"))
-        nx = int(getattr(p, "nx"))
-        nu = int(getattr(p, "nu"))
+        p, nx, nu, N, dt = self._dims("MPCOSQP")
         K = int(getattr(self.cbf, "max_obstacles", 0)) if self.cbf is not None else 0
+        have_v = self._has_v_bounds()
+        have_a = self._has_a_bounds()
 
-        have_v = (getattr(p, "v_min", None) is not None) and (
-            getattr(p, "v_max", None) is not None
-        )
-        have_a = (getattr(p, "a_min", None) is not None) and (
-            getattr(p, "a_max", None) is not None
-        )
-
+        # 优化变量 z = [
+        #   x_0, x_1, ..., x_N,
+        #   u_0, u_1, ..., u_{N-1},
+        #   sv_0, sv_1, ..., sv_N,
+        #   sa_0, sa_1, ..., sa_N,
+        #   cbf_slack_0, ..., cbf_slack_{N*K-1}
+        # ]
         x0 = 0
         u0 = nx * (N + 1)
         sv0 = u0 + nu * N if have_v else None
@@ -154,17 +394,16 @@ class MPCOSQP:
         sa0 = sa0 if have_a else None
         idx = _Idx(nx=nx, nu=nu, N=N, x0=x0, u0=u0, sv0=sv0, sa0=sa0)
         cbf_slack0 = idx.nvar if K > 0 else None
-        nvar = idx.nvar + (N * K if K > 0 else 0)
+        nvar = idx.nvar + (N * K if K > 0 else 0) 
 
         # --------------------
         # Objective: 0.5 z' P z + q' z
         # --------------------
         P = np.zeros((nvar, nvar), dtype=float)
+        
+        # [px_i, py_i, pz_i]_{N+1}^T @ Q @ [px_i, py_i, pz_i]_{N+1}
         track_idx = np.asarray(getattr(p, "track_idx"), dtype=int)
         Q = np.asarray(getattr(p, "Q"), dtype=float)
-        R = np.asarray(getattr(p, "R"), dtype=float)
-        Rd = np.asarray(getattr(p, "Rd"), dtype=float)
-
         for k in range(N):
             xk = idx.x(k)
             P[np.ix_(xk.start + track_idx, xk.start + track_idx)] += 2.0 * Q
@@ -172,32 +411,11 @@ class MPCOSQP:
         P[np.ix_(xN.start + track_idx, xN.start + track_idx)] += (
             2.0 * float(getattr(p, "terminal")) * Q
         )
-
-        for k in range(N):
-            uk = idx.u(k)
-            P[uk, uk] += 2.0 * R
-
-        # smoothness: (u_{k+1}-u_k)' Rd (u_{k+1}-u_k)
-        for k in range(N - 1):
-            uk = idx.u(k)
-            uk1 = idx.u(k + 1)
-            P[uk, uk] += 2.0 * Rd
-            P[uk1, uk1] += 2.0 * Rd
-            P[uk, uk1] += -2.0 * Rd
-            P[uk1, uk] += -2.0 * Rd
-        # smoothness to previous input: (u0-u_init)' Rd (u0-u_init)
-        P[idx.u(0), idx.u(0)] += 2.0 * Rd
-
-        if have_v:
-            w = float(getattr(p, "v_slack_weight"))
-            for k in range(N + 1):
-                sk = idx.sv(k)
-                P[sk, sk] += 2.0 * w * np.eye(3)
-        if have_a:
-            w = float(getattr(p, "a_slack_weight"))
-            for k in range(N + 1):
-                sk = idx.sa(k)
-                P[sk, sk] += 2.0 * w * np.eye(3)
+        # [jx_i, jy_i, jz_i]_{N}^T @ R @ [jx_i, jy_i, jz_i]_{N}
+        R = np.asarray(getattr(p, "R"), dtype=float)
+        Rd = np.asarray(getattr(p, "Rd"), dtype=float)
+        self._add_input_cost(P, idx, N, R, Rd)
+        self._add_soft_cost(P, idx, N, have_v=have_v, have_a=have_a)
         if cbf_slack0 is not None:
             w = float(getattr(self.cbf, "slack_weight"))
             for i in range(N * K):
@@ -206,90 +424,24 @@ class MPCOSQP:
         # --------------------
         # Constraints: l <= A z <= u
         # --------------------
-        A_d, B_d = uav_jerk_discrete_matrices(getattr(p, "dt"))
-
         rows: list[np.ndarray] = []
         l: list[np.ndarray] = []
         u: list[np.ndarray] = []
 
-        def add(Ak: np.ndarray, lk: np.ndarray, uk: np.ndarray):
-            rows.append(Ak)
-            l.append(lk)
-            u.append(uk)
-
         # x0 == x_init (filled at solve via bounds)
         A0 = np.zeros((nx, nvar), dtype=float)
         A0[:, idx.x(0)] = np.eye(nx)
-        add(A0, np.zeros(nx), np.zeros(nx))
+        rows.append(A0)
+        l.append(np.zeros(nx))
+        u.append(np.zeros(nx))
         rows_x0 = slice(0, nx)
 
         # dynamics: x_{k+1} - A x_k - B u_k == 0
-        for k in range(N):
-            Ak = np.zeros((nx, nvar), dtype=float)
-            Ak[:, idx.x(k + 1)] = np.eye(nx)
-            Ak[:, idx.x(k)] = -A_d
-            Ak[:, idx.u(k)] = -B_d
-            add(Ak, np.zeros(nx), np.zeros(nx))
+        self._add_dynamics(rows, l, u, idx, nx=nx, N=N, nvar=nvar, dt=dt)
+        rows_du0 = self._add_du_constraints(rows, l, u, idx, nu=nu, N=N, nvar=nvar, dt=dt)
+        self._add_soft_constraints(rows, l, u, idx, N=N, nvar=nvar, have_v=have_v, have_a=have_a)
 
-        rows_du0 = None
-        if (getattr(p, "du_min", None) is not None) and (
-            getattr(p, "du_max", None) is not None
-        ):
-            du_min = np.asarray(getattr(p, "du_min"), dtype=float).reshape(nu)
-            du_max = np.asarray(getattr(p, "du_max"), dtype=float).reshape(nu)
-            lb_du = float(getattr(p, "dt")) * du_min
-            ub_du = float(getattr(p, "dt")) * du_max
-
-            for k in range(N - 1):
-                Ak = np.zeros((nu, nvar), dtype=float)
-                Ak[:, idx.u(k + 1)] = np.eye(nu)
-                Ak[:, idx.u(k)] = -np.eye(nu)
-                add(Ak, lb_du, ub_du)
-
-            # u0 - u_init in [dt*du_min, dt*du_max]  <=>  u0 in [u_init+..., u_init+...]
-            Ak = np.zeros((nu, nvar), dtype=float)
-            Ak[:, idx.u(0)] = np.eye(nu)
-            start = sum(r.shape[0] for r in rows)
-            add(Ak, lb_du, ub_du)
-            rows_du0 = slice(start, start + nu)
-
-        if have_v:
-            v_min = np.asarray(getattr(p, "v_min"), dtype=float).reshape(3)
-            v_max = np.asarray(getattr(p, "v_max"), dtype=float).reshape(3)
-            for k in range(N + 1):
-                xk = idx.x(k)
-
-                # v + s >= v_min  (same as in tracking_opt.py: v >= v_min - s)
-                Ak = np.zeros((3, nvar), dtype=float)
-                Ak[:, xk.start + 3 : xk.start + 6] = np.eye(3)
-                Ak[:, idx.sv(k)] = np.eye(3)
-                add(Ak, v_min, np.full(3, np.inf))
-
-                # v - s <= v_max  (same as in tracking_opt.py: v <= v_max + s)
-                Ak = np.zeros((3, nvar), dtype=float)
-                Ak[:, xk.start + 3 : xk.start + 6] = np.eye(3)
-                Ak[:, idx.sv(k)] = -np.eye(3)
-                add(Ak, np.full(3, -np.inf), v_max)
-
-        if have_a:
-            a_min = np.asarray(getattr(p, "a_min"), dtype=float).reshape(3)
-            a_max = np.asarray(getattr(p, "a_max"), dtype=float).reshape(3)
-            for k in range(N + 1):
-                xk = idx.x(k)
-
-                Ak = np.zeros((3, nvar), dtype=float)
-                Ak[:, xk.start + 6 : xk.start + 9] = np.eye(3)
-                Ak[:, idx.sa(k)] = np.eye(3)
-                add(Ak, a_min, np.full(3, np.inf))
-
-                Ak = np.zeros((3, nvar), dtype=float)
-                Ak[:, xk.start + 6 : xk.start + 9] = np.eye(3)
-                Ak[:, idx.sa(k)] = -np.eye(3)
-                add(Ak, np.full(3, -np.inf), a_max)
-
-        A_base = np.vstack(rows) if rows else np.zeros((0, nvar), dtype=float)
-        l_base = np.concatenate(l) if l else np.zeros(0, dtype=float)
-        u_base = np.concatenate(u) if u else np.zeros(0, dtype=float)
+        A_base, l_base, u_base = self._stack_rows(rows, l, u, nvar)
 
         if K > 0:
             cbf_start = A_base.shape[0]
@@ -310,32 +462,14 @@ class MPCOSQP:
         else:
             rows_cbf = slice(A_base.shape[0], A_base.shape[0])
 
-        # Variable bounds via stacked identity constraints.
-        l_var = np.full(nvar, -np.inf, dtype=float)
-        u_var = np.full(nvar, np.inf, dtype=float)
-
-        if (getattr(p, "u_min", None) is not None) and (
-            getattr(p, "u_max", None) is not None
-        ):
-            u_min = np.asarray(getattr(p, "u_min"), dtype=float).reshape(nu)
-            u_max = np.asarray(getattr(p, "u_max"), dtype=float).reshape(nu)
-            for k in range(N):
-                uk = idx.u(k)
-                l_var[uk] = u_min
-                u_var[uk] = u_max
-
-        if have_v:
-            for k in range(N + 1):
-                l_var[idx.sv(k)] = 0.0
-        if have_a:
-            for k in range(N + 1):
-                l_var[idx.sa(k)] = 0.0
+        l_var, u_var = self._var_bounds(
+            idx, nvar=nvar, nu=nu, N=N, have_v=have_v, have_a=have_a
+        )
         if cbf_slack0 is not None:
             l_var[cbf_slack0 : cbf_slack0 + N * K] = 0.0
 
         # Stack [A_base; I]
-        import scipy.sparse as sp
-        import osqp
+        sp = OSQPInterface.sparse_module("MPCOSQP")
 
         A = np.vstack([A_base, np.eye(nvar, dtype=float)])
         l_full = np.concatenate([l_base, l_var])
@@ -344,8 +478,7 @@ class MPCOSQP:
         P_sp = sp.csc_matrix((P + P.T) * 0.5)
         A_sp = sp.csc_matrix(A)
 
-        solver = osqp.OSQP()
-        solver.setup(
+        self._osqp.setup(
             P=P_sp,
             q=np.zeros(nvar),
             A=A_sp,
@@ -365,7 +498,6 @@ class MPCOSQP:
                     A_pos[(int(A_sp.indices[data_i]), col)] = data_i
 
         self._idx = idx
-        self._solver = solver
         self._l_base = l_base
         self._u_base = u_base
         self._l_var = l_var
@@ -472,7 +604,7 @@ class MPCOSQP:
         obstacle_points=None,
         log: bool = False,
     ):
-        if self._solver is None or self._idx is None:
+        if not self._osqp.ready or self._idx is None:
             raise RuntimeError("Call setup() before solve().")
 
         idx = self._idx
@@ -502,21 +634,9 @@ class MPCOSQP:
 
         q[idx.u(0)] += -2.0 * (Rd @ u0)
 
-        # l/u (update x0 equality + du0 bounds)
-        l_base = np.array(self._l_base, copy=True)
-        u_base = np.array(self._u_base, copy=True)
-        l_base[self._rows_x0] = x0
-        u_base[self._rows_x0] = x0
-
-        if (
-            self._rows_du0 is not None
-            and (getattr(p, "du_min", None) is not None)
-            and (getattr(p, "du_max", None) is not None)
-        ):
-            du_min = np.asarray(getattr(p, "du_min"), dtype=float).reshape(nu)
-            du_max = np.asarray(getattr(p, "du_max"), dtype=float).reshape(nu)
-            l_base[self._rows_du0] = u0 + float(getattr(p, "dt")) * du_min
-            u_base[self._rows_du0] = u0 + float(getattr(p, "dt")) * du_max
+        l_base, u_base = self._bounds_for_state_and_du(
+            x0, u0, nu=nu, dt=float(getattr(p, "dt"))
+        )
 
         if self.cbf is not None:
             if obstacle_normals is None or obstacle_points is None:
@@ -528,10 +648,7 @@ class MPCOSQP:
         u = np.concatenate([u_base, self._u_var])
 
         # Warm start (shift by one step)
-        x_ws = np.asarray(x_ws, dtype=float).reshape(nx, N + 1)
-        u_ws = np.asarray(u_ws, dtype=float).reshape(nu, N)
-        x_ws = np.hstack([x_ws[:, 1:], x_ws[:, -1:]])
-        u_ws = np.hstack([u_ws[:, 1:], u_ws[:, -1:]]) if N > 1 else u_ws.copy()
+        x_ws, u_ws = self._shift_xu_warmstart(x_ws, u_ws, nx=nx, nu=nu, N=N)
 
         z0 = np.zeros(nvar, dtype=float)
         for k in range(N + 1):
@@ -539,38 +656,15 @@ class MPCOSQP:
         for k in range(N):
             z0[idx.u(k)] = u_ws[:, k]
 
-        if self.cbf is None:
-            self._solver.update(q=q, l=l, u=u)
-        else:
-            self._solver.update(Ax=self._A.data, q=q, l=l, u=u)
-        self._solver.warm_start(x=z0)
-
-        t0 = time.perf_counter()
-        res = self._solver.solve()
-        dt_s = time.perf_counter() - t0
-        self.solver_times.append(dt_s)
-
-        if log:
-            print(
-                f"solver time: {dt_s:.6f}s, "
-                f"max: {max(self.solver_times):.6f}s, "
-                f"mean: {float(np.mean(self.solver_times)):.6f}s, "
-                f"status: {res.info.status}"
-            )
-
-        status = str(res.info.status).lower()
-        if status not in _SOLVED_STATUSES or res.x is None:
-            raise RuntimeError(f"OSQP failed: {res.info.status}")
-
-        z = np.asarray(res.x, dtype=float).reshape(-1)
-        x_sol = np.zeros((nx, N + 1), dtype=float)
-        u_sol = np.zeros((nu, N), dtype=float)
-        for k in range(N + 1):
-            x_sol[:, k] = z[idx.x(k)]
-        for k in range(N):
-            u_sol[:, k] = z[idx.u(k)]
-
-        return x_sol, u_sol
+        z = self._osqp.solve(
+            q=q,
+            l=l,
+            u=u,
+            Ax=None if self.cbf is None else self._A.data,
+            warm_start=z0,
+            log=log,
+        )
+        return self._extract_xu(z, idx)
 
 
 @dataclass(frozen=True)
@@ -619,7 +713,7 @@ class _IdxTracker:
         return slice(s, s + 3)
 
 
-class MPCCOSQP:
+class MPCCOSQP(OSQPProblemBase):
     """
     OSQP-based QP MPCC that mirrors `tracking_opt.MPCC`.
 
@@ -629,22 +723,11 @@ class MPCCOSQP:
     """
 
     def __init__(self, params):
-        self.params = params
-        self.solver_times: list[float] = []
-
-        self._idx: _IdxTracker | None = None
-        self._solver = None
+        super().__init__("MPCCOSQP", params)
         self._P = None
         self._P_pos: dict[tuple[int, int], int] | None = None
 
-        self._l_base: np.ndarray | None = None
-        self._u_base: np.ndarray | None = None
-        self._l_var: np.ndarray | None = None
-        self._u_var: np.ndarray | None = None
-
-        self._rows_x0: slice | None = None
         self._rows_s0: slice | None = None
-        self._rows_du0: slice | None = None
 
         self._q_const: np.ndarray | None = None
 
@@ -664,27 +747,9 @@ class MPCCOSQP:
         self._path_L = poly.length
 
     def setup(self):
-        try:
-            import osqp  # noqa: F401
-            import scipy.sparse as sp  # noqa: F401
-        except ModuleNotFoundError as exc:
-            raise ModuleNotFoundError("MPCCOSQP requires `osqp` and `scipy`.") from exc
-
-        p = self.params
-        nx = int(getattr(p, "nx"))
-        nu = int(getattr(p, "nu"))
-        N = int(getattr(p, "horizon"))
-        dt = float(getattr(p, "dt"))
-
-        if nx != 9 or nu != 3:
-            raise ValueError("MPCCOSQP supports nx=9, nu=3 (UAV p,v,a + jerk).")
-
-        have_v = (getattr(p, "v_min", None) is not None) and (
-            getattr(p, "v_max", None) is not None
-        )
-        have_a = (getattr(p, "a_min", None) is not None) and (
-            getattr(p, "a_max", None) is not None
-        )
+        p, nx, nu, N, dt = self._dims("MPCCOSQP")
+        have_v = self._has_v_bounds()
+        have_a = self._has_a_bounds()
 
         x0 = 0
         u0 = nx * (N + 1)
@@ -714,18 +779,7 @@ class MPCCOSQP:
             else np.asarray(p.Rd, dtype=float)
         )
 
-        for k in range(N):
-            uk = idx.u(k)
-            P[uk, uk] += 2.0 * R
-
-        for k in range(N - 1):
-            uk = idx.u(k)
-            uk1 = idx.u(k + 1)
-            P[uk, uk] += 2.0 * Rd
-            P[uk1, uk1] += 2.0 * Rd
-            P[uk, uk1] += -2.0 * Rd
-            P[uk1, uk] += -2.0 * Rd
-        P[idx.u(0), idx.u(0)] += 2.0 * Rd
+        self._add_input_cost(P, idx, N, R, Rd)
 
         q_l = float(getattr(p, "q_lag", 2.0))
         q_term = float(getattr(p, "q_terminal_s", 50.0))
@@ -733,16 +787,7 @@ class MPCCOSQP:
             P[idx.s(k), idx.s(k)] += 2.0 * q_l
         P[idx.s(N), idx.s(N)] += 2.0 * q_term
 
-        if have_v:
-            w = float(getattr(p, "v_slack_weight", 50.0))
-            for k in range(N + 1):
-                sk = idx.sv(k)
-                P[sk, sk] += 2.0 * w * np.eye(3)
-        if have_a:
-            w = float(getattr(p, "a_slack_weight", 50.0))
-            for k in range(N + 1):
-                sk = idx.sa(k)
-                P[sk, sk] += 2.0 * w * np.eye(3)
+        self._add_soft_cost(P, idx, N, have_v=have_v, have_a=have_a)
 
         # Ensure sparsity pattern for per-step MPCC updates (p block + p-s cross).
         t0_nom = np.array([1.0, 1.0, 1.0], dtype=float)
@@ -770,112 +815,44 @@ class MPCCOSQP:
         # --------------------
         # Constraints: l <= A z <= u
         # --------------------
-        A_d, B_d = uav_jerk_discrete_matrices(dt)
-
         rows: list[np.ndarray] = []
         l: list[np.ndarray] = []
         u: list[np.ndarray] = []
 
-        def add(Ak: np.ndarray, lk: np.ndarray, uk: np.ndarray):
-            rows.append(Ak)
-            l.append(lk)
-            u.append(uk)
-
         A0 = np.zeros((nx, nvar), dtype=float)
         A0[:, idx.x(0)] = np.eye(nx)
-        add(A0, np.zeros(nx), np.zeros(nx))
+        rows.append(A0)
+        l.append(np.zeros(nx))
+        u.append(np.zeros(nx))
         rows_x0 = slice(0, nx)
 
         # s0 equality (value filled at solve)
         As0 = np.zeros((1, nvar), dtype=float)
         As0[0, idx.s(0)] = 1.0
         start_s0 = sum(r.shape[0] for r in rows)
-        add(As0, np.zeros(1), np.zeros(1))
+        rows.append(As0)
+        l.append(np.zeros(1))
+        u.append(np.zeros(1))
         rows_s0 = slice(start_s0, start_s0 + 1)
 
-        for k in range(N):
-            Ak = np.zeros((nx, nvar), dtype=float)
-            Ak[:, idx.x(k + 1)] = np.eye(nx)
-            Ak[:, idx.x(k)] = -A_d
-            Ak[:, idx.u(k)] = -B_d
-            add(Ak, np.zeros(nx), np.zeros(nx))
+        self._add_dynamics(rows, l, u, idx, nx=nx, N=N, nvar=nvar, dt=dt)
 
         for k in range(N):
             Ak = np.zeros((1, nvar), dtype=float)
             Ak[0, idx.s(k + 1)] = 1.0
             Ak[0, idx.s(k)] = -1.0
             Ak[0, idx.vs(k)] = -dt
-            add(Ak, np.zeros(1), np.zeros(1))
+            rows.append(Ak)
+            l.append(np.zeros(1))
+            u.append(np.zeros(1))
 
-        rows_du0 = None
-        if (getattr(p, "du_min", None) is not None) and (
-            getattr(p, "du_max", None) is not None
-        ):
-            du_min = np.asarray(p.du_min, dtype=float).reshape(nu)
-            du_max = np.asarray(p.du_max, dtype=float).reshape(nu)
-            lb_du = dt * du_min
-            ub_du = dt * du_max
+        rows_du0 = self._add_du_constraints(rows, l, u, idx, nu=nu, N=N, nvar=nvar, dt=dt)
+        self._add_soft_constraints(rows, l, u, idx, N=N, nvar=nvar, have_v=have_v, have_a=have_a)
 
-            for k in range(N - 1):
-                Ak = np.zeros((nu, nvar), dtype=float)
-                Ak[:, idx.u(k + 1)] = np.eye(nu)
-                Ak[:, idx.u(k)] = -np.eye(nu)
-                add(Ak, lb_du, ub_du)
-
-            Ak = np.zeros((nu, nvar), dtype=float)
-            Ak[:, idx.u(0)] = np.eye(nu)
-            start = sum(r.shape[0] for r in rows)
-            add(Ak, lb_du, ub_du)
-            rows_du0 = slice(start, start + nu)
-
-        if have_v:
-            v_min = np.asarray(p.v_min, dtype=float).reshape(3)
-            v_max = np.asarray(p.v_max, dtype=float).reshape(3)
-            for k in range(N + 1):
-                xk = idx.x(k)
-
-                Ak = np.zeros((3, nvar), dtype=float)
-                Ak[:, xk.start + 3 : xk.start + 6] = np.eye(3)
-                Ak[:, idx.sv(k)] = np.eye(3)
-                add(Ak, v_min, np.full(3, np.inf))
-
-                Ak = np.zeros((3, nvar), dtype=float)
-                Ak[:, xk.start + 3 : xk.start + 6] = np.eye(3)
-                Ak[:, idx.sv(k)] = -np.eye(3)
-                add(Ak, np.full(3, -np.inf), v_max)
-
-        if have_a:
-            a_min = np.asarray(p.a_min, dtype=float).reshape(3)
-            a_max = np.asarray(p.a_max, dtype=float).reshape(3)
-            for k in range(N + 1):
-                xk = idx.x(k)
-
-                Ak = np.zeros((3, nvar), dtype=float)
-                Ak[:, xk.start + 6 : xk.start + 9] = np.eye(3)
-                Ak[:, idx.sa(k)] = np.eye(3)
-                add(Ak, a_min, np.full(3, np.inf))
-
-                Ak = np.zeros((3, nvar), dtype=float)
-                Ak[:, xk.start + 6 : xk.start + 9] = np.eye(3)
-                Ak[:, idx.sa(k)] = -np.eye(3)
-                add(Ak, np.full(3, -np.inf), a_max)
-
-        A_base = np.vstack(rows) if rows else np.zeros((0, nvar), dtype=float)
-        l_base = np.concatenate(l) if l else np.zeros(0, dtype=float)
-        u_base = np.concatenate(u) if u else np.zeros(0, dtype=float)
-
-        l_var = np.full(nvar, -np.inf, dtype=float)
-        u_var = np.full(nvar, np.inf, dtype=float)
-
-        if (getattr(p, "u_min", None) is not None) and (
-            getattr(p, "u_max", None) is not None
-        ):
-            u_min = np.asarray(p.u_min, dtype=float).reshape(nu)
-            u_max = np.asarray(p.u_max, dtype=float).reshape(nu)
-            for k in range(N):
-                uk = idx.u(k)
-                l_var[uk] = u_min
-                u_var[uk] = u_max
+        A_base, l_base, u_base = self._stack_rows(rows, l, u, nvar)
+        l_var, u_var = self._var_bounds(
+            idx, nvar=nvar, nu=nu, N=N, have_v=have_v, have_a=have_a
+        )
 
         # s >= 0 by default (upper bound filled at solve if path is known)
         for k in range(N + 1):
@@ -890,15 +867,7 @@ class MPCCOSQP:
             l_var[vsk] = lo_vs
             u_var[vsk] = hi_vs
 
-        if have_v:
-            for k in range(N + 1):
-                l_var[idx.sv(k)] = 0.0
-        if have_a:
-            for k in range(N + 1):
-                l_var[idx.sa(k)] = 0.0
-
-        import scipy.sparse as sp
-        import osqp
+        sp = OSQPInterface.sparse_module("MPCCOSQP")
 
         A = np.vstack([A_base, np.eye(nvar, dtype=float)])
         l_full = np.concatenate([l_base, l_var])
@@ -907,8 +876,7 @@ class MPCCOSQP:
         P_sp = sp.triu(sp.csc_matrix((P + P.T) * 0.5), format="csc")
         A_sp = sp.csc_matrix(A)
 
-        solver = osqp.OSQP()
-        solver.setup(
+        self._osqp.setup(
             P=P_sp,
             q=np.zeros(nvar),
             A=A_sp,
@@ -927,7 +895,6 @@ class MPCCOSQP:
                 P_pos[(row, col)] = data_i
 
         self._idx = idx
-        self._solver = solver
         self._P = P_sp
         self._P_pos = P_pos
         self._l_base = l_base
@@ -1077,7 +1044,7 @@ class MPCCOSQP:
         log: bool = False,
     ):
         if (
-            self._solver is None
+            not self._osqp.ready
             or self._idx is None
             or self._P is None
             or self._P_pos is None
@@ -1134,22 +1101,9 @@ class MPCCOSQP:
         )
         q[idx.u(0)] += -2.0 * (Rd @ u0)
 
-        l_base = np.array(self._l_base, copy=True)
-        u_base = np.array(self._u_base, copy=True)
-        l_base[self._rows_x0] = x0
-        u_base[self._rows_x0] = x0
+        l_base, u_base = self._bounds_for_state_and_du(x0, u0, nu=nu, dt=dt)
         l_base[self._rows_s0] = np.array([s_init], dtype=float)
         u_base[self._rows_s0] = np.array([s_init], dtype=float)
-
-        if (
-            self._rows_du0 is not None
-            and (getattr(p, "du_min", None) is not None)
-            and (getattr(p, "du_max", None) is not None)
-        ):
-            du_min = np.asarray(p.du_min, dtype=float).reshape(nu)
-            du_max = np.asarray(p.du_max, dtype=float).reshape(nu)
-            l_base[self._rows_du0] = u0 + dt * du_min
-            u_base[self._rows_du0] = u0 + dt * du_max
 
         l_var = np.array(self._l_var, copy=True)
         u_var = np.array(self._u_var, copy=True)
@@ -1159,10 +1113,7 @@ class MPCCOSQP:
         l = np.concatenate([l_base, l_var])
         u = np.concatenate([u_base, u_var])
 
-        x_ws = np.asarray(x_ws, dtype=float).reshape(nx, N + 1)
-        u_ws = np.asarray(u_ws, dtype=float).reshape(nu, N)
-        x_ws = np.hstack([x_ws[:, 1:], x_ws[:, -1:]])
-        u_ws = np.hstack([u_ws[:, 1:], u_ws[:, -1:]]) if N > 1 else u_ws.copy()
+        x_ws, u_ws = self._shift_xu_warmstart(x_ws, u_ws, nx=nx, nu=nu, N=N)
 
         if s_ws is None:
             s_ws_arr = np.zeros((1, N + 1), dtype=float)
@@ -1188,36 +1139,21 @@ class MPCCOSQP:
             z0[idx.u(k)] = u_ws[:, k]
             z0[idx.vs(k)] = vs_ws_arr[0, k]
 
-        self._solver.update(Px=self._P.data, q=q, l=l, u=u)
-        self._solver.warm_start(x=z0)
+        z = self._osqp.solve(
+            q=q,
+            l=l,
+            u=u,
+            Px=self._P.data,
+            warm_start=z0,
+            log=log,
+        )
 
-        t0 = time.perf_counter()
-        res = self._solver.solve()
-        dt_s = time.perf_counter() - t0
-        self.solver_times.append(dt_s)
-
-        if log:
-            print(
-                f"solver time: {dt_s:.6f}s, "
-                f"max: {max(self.solver_times):.6f}s, "
-                f"mean: {float(np.mean(self.solver_times)):.6f}s, "
-                f"status: {res.info.status}"
-            )
-
-        if res.x is None:
-            raise RuntimeError(f"OSQP failed: {res.info.status}")
-
-        z = np.asarray(res.x, dtype=float).reshape(-1)
-
-        x_sol = np.zeros((nx, N + 1), dtype=float)
-        u_sol = np.zeros((nu, N), dtype=float)
+        x_sol, u_sol = self._extract_xu(z, idx)
         s_sol = np.zeros((1, N + 1), dtype=float)
         vs_sol = np.zeros((1, N), dtype=float)
         for k in range(N + 1):
-            x_sol[:, k] = z[idx.x(k)]
             s_sol[0, k] = z[idx.s(k)]
         for k in range(N):
-            u_sol[:, k] = z[idx.u(k)]
             vs_sol[0, k] = z[idx.vs(k)]
 
         return x_sol, u_sol, s_sol, vs_sol

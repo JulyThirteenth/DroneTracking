@@ -118,8 +118,8 @@ cd ${Path2Project}/DroneTracking
 `run_code.sh` starts:
 
 - `python plan2track/plan2track.py`
-- `python fsm/fsm_node.py`
-- `python fsm/fsm_app.py`
+- `python -m fsm.fsm_main`
+- `python -m fsm.fsm_interface`
 
 `run_oa_code.sh` starts the same controller panes and additionally starts:
 
@@ -133,8 +133,8 @@ source ./tools/simdrone_env.sh
 export DRONE_TRACKING_CONFIG=config_0.yaml
 
 python plan2track/plan2track.py
-python fsm/fsm_node.py
-python fsm/fsm_app.py
+python -m fsm.fsm_main
+python -m fsm.fsm_interface
 python perception/depth2scan.py --ros-args \
   -p depth_topic:=/depth \
   -p scan_topic:=/depth2scan/scan \
@@ -145,7 +145,7 @@ python perception/depth2scan.py --ros-args \
 
 ## FSM Commands
 
-Use `fsm/fsm_app.py` for interactive commands:
+Use `python -m fsm.fsm_interface` for interactive commands:
 
 - `prepare`
 - `takeoff`
@@ -180,10 +180,9 @@ python plan2track/generate_waypoints.py
 The selected waypoint file is configured by:
 
 ```yaml
-tracking:
-  tasks:
-    dir_name: plan2track/waypoints
-    waypoint_file: line_waypoint.txt
+plan2track:
+  path:
+    file: plan2track/waypoints/line_waypoint.txt
 ```
 
 ## Perception
@@ -229,19 +228,19 @@ scan points, it behaves as the normal tracking MPC.
 Relevant YAML sections:
 
 - `runtime`: controller and solver selection
-- `fsm`: FSM topics, logging, takeoff velocity, and auto-land thresholds
-- `plan2track`: path topics, waypoint loading mode, loop mode, fixed yaw, and `init_yaw`
-- `tracking_ros`: PX4 ROS topics, target system, and `pub_offboard`
-- `tracking.tasks`: waypoint file selection under `plan2track/waypoints`
+- `topics`: FSM, planning, tracking, PX4, and perception ROS topics
+- `vehicle`: PX4 target system and offboard publication switch
+- `fsm`: FSM logging, takeoff, and auto-land behavior parameters
+- `plan2track`: waypoint file, loading mode, loop mode, fixed yaw, and initial yaw
 - `tracking.mpc`: horizon, timestep, and reference speed
-- `tracking.control`: controller timer period
+- `tracking.mpc.cost`: MPC cost weights
+- `tracking.mpcc`: MPCC cost weights and progress limits
+- `tracking.control_loop`: controller timer period
 - `tracking.yaw`: yaw gain and yaw-rate limit
 - `tracking.ctbr`: body-rate/thrust conversion parameters
 - `tracking.accel_fusion`: acceleration smoothing
 - `tracking.constraints`: MPC state/input bounds
-- `tracking.mpc_cost`: MPC cost weights
-- `tracking.mpcc_cost`: MPCC cost weights
-- `tracking.hocbf`: depth scan topic, camera offset, safety radius, gains, and slack weight
+- `tracking.hocbf`: camera offset, safety radius, gains, and slack weight
 
 ## Coordinate Notes
 
@@ -264,9 +263,13 @@ Relevant YAML sections:
 - `perception/depth2scan.py`: depth image to pseudo LaserScan converter
 - `tracking/tracking_cnt.py`: controller step, CTBR conversion, and yaw-rate logic
 - `tracking/tracking_osqp.py`: OSQP MPC/HOCBF solver implementation
+<<<<<<< HEAD
 - `tracking/tracking_ros.py`: PX4 ROS message bridge
+=======
+>>>>>>> 66427e1 (add obstacle avoidance)
+- `fsm/fsm_main.py`: FSM node startup
 - `fsm/fsm_node.py`: FSM ROS node and transition coordinator
-- `fsm/behaviors.py`: per-state behavior and tracker command publication
-- `fsm/fsm_app.py`: interactive FSM terminal
+- `fsm/fsm_mpc.py`: MPC/MPCC behavior and tracker command publication
+- `fsm/fsm_interface.py`: interactive FSM terminal
 - `yamls/config.py`: YAML config loader
 - `yamls/*.yaml`: runtime configs
