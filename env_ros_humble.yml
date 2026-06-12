@@ -13,3 +13,10 @@ dependencies:
       - casadi
       - osqp
       - pyyaml
+      # embodied-agent dependencies
+      - langchain
+      - langchain-openai
+      - langchain-google-genai
+      - pillow
+      - python-dotenv
+      - ipykernel

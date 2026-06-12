@@ -9,11 +9,13 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 fi
 
 # 1) 让 conda activate 在当前 shell 可用
-# 按你的实际 conda 安装路径二选一（miniconda3/anaconda3）
+# 按你的实际 conda 安装路径三选一（miniconda3/anaconda3/Docker容器的conda）
 if [[ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]]; then
   source "$HOME/miniconda3/etc/profile.d/conda.sh"
 elif [[ -f "$HOME/anaconda3/etc/profile.d/conda.sh" ]]; then
   source "$HOME/anaconda3/etc/profile.d/conda.sh"
+elif [[ -f "/opt/conda/etc/profile.d/conda.sh" ]]; then
+  source "/opt/conda/etc/profile.d/conda.sh"
 else
   echo "ERROR: 找不到 conda.sh，请确认 conda 安装路径（miniconda3/anaconda3）"
   return 1

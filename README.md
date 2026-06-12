@@ -1,275 +1,134 @@
-# DroneTracking
+# DroneTracking — Agent Navigation
 
-DroneTracking is a Pegasus/Isaac Sim based drone tracking and obstacle-avoidance
-workspace. The current workflow targets Isaac Sim 5.1, PX4 1.16, ROS 2 Humble,
-and the conda environment.
+This branch provides **agent-based navigation** for drone tracking. The agent interprets visual scenes and
+controls drone movement via ROS2, using LLM-powered reasoning (SPF — Semantic Platform Framework).
 
-<p align="center">
-  <img src="./assets/chaser_racing.gif" alt="Chaser racing" width="32%">
-  <img src="./assets/mpc.gif" alt="MPC demo" width="32%">
-  <img src="./assets/chaser_racing_isaacsim.gif" alt="Chaser racing in Isaac Sim" width="32%">
-</p>
+## Progress
 
-## Requirements
+| Module | Status |
+|--------|--------|
+| **ROS2_CONTROL** — Bridge between agent and ROS2 (navigation / rotation) | ✅ Done |
+| **AGENT Debugging** — Prompt engineering (skill & tool tuning) | ⬜ Not started |
 
-- Isaac Sim 5.1 with Pegasus Simulator
-- PX4 1.16 configured in the Pegasus extension
-- ROS 2 Humble on Ubuntu 22.04
-- `px4-ros_ws` overlay available through `tools/simdrone_env.sh`
-- ROS 2 package: `px4_msgs`
-- Optional: QGroundControl at `~/DroneSimulator/QGroundControl-x86_64.AppImage`
+Currently tested via [`test_agent.ipynb`](./test_agent.ipynb).
 
-Load the project environment with:
+---
+
+## Environment Configuration
+
+LLM settings are loaded from a `.env` file in the project root via [`load_dotenv()`](./embodied_agent/init_agent_env_and_create_agent.py:6). Refer to [`.env.example`](./.env.example) for the available variables and a ready-to-use template.
+
+Copy the template and fill in your API key:
 
 ```bash
-cd ${Path2Project}/DroneTracking
-source ./tools/simdrone_env.sh
+cp .env.example .env
 ```
 
-## Config
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `LLM_PROVIDER` | Provider (`OPENAI` / `GOOGLE`) | `OPENAI` |
+| `LLM_API_KEY` | API key | **Required** |
+| `LLM_BASE_URL` | Custom API endpoint (optional) | — |
+| `LLM_MODEL` | Model name | `gpt-4o` (OPENAI) / `gemini-2.5-pro` (GOOGLE) |
+| `LLM_TEMPERATURE` | Generation temperature | `0.7` |
 
-Runtime options are loaded from YAML through `DRONE_TRACKING_CONFIG`.
+> **Note**: `.env` is listed in `.gitignore` — do not commit it to version control.
+
+---
+
+## Quick Start
+
+### Prerequisites
+
+The system requires the `mpcc` conda environment (defined in [`env_ros_humble.yml`](./env_ros_humble.yml)).
+
+### 1. Launch the simulator (Isaac Sim)
 
 ```bash
-export DRONE_TRACKING_CONFIG=config_0.yaml
-export DRONE_TRACKING_CONFIG=config_1.yaml
+isaac_run /path/to/DroneTracking/isaacsim/sim_single.py \
+  --ext-folder ~/PegasusSimulator/extensions \
+  --enable pegasus.simulator \
+  --enable omni.isaac.ros2_bridge \
+  --enable omni.replicator.core
+```
+
+### 2. Start the ROS2 bridge (MicroXRCE-DDS Agent)
+
+```bash
+/path/to/Micro-XRCE-DDS-Agent/build/MicroXRCEAgent udp4 -p 8888
+```
+
+### 3. Launch the drone control pipeline
+
+```bash
 export DRONE_TRACKING_CONFIG=config_oa.yaml
-export DRONE_TRACKING_CONFIG=cfg_visual.yaml
-export DRONE_TRACKING_CONFIG=cfg_lidar.yaml
+cd /path/to/DroneTracking/tools
+bash run_oa_code_1.sh
 ```
 
-Relative config names are resolved under `yamls/`; absolute paths also work. If
-unset, `yamls/config_0.yaml` is used.
+This starts the FSM and tracking modules in a `tmux` session (see [`run_oa_code_1.sh`](./tools/run_oa_code_1.sh) for details).
 
-Built-in configs:
+### 4. Jupyter notebook development
 
-- `config_0.yaml`: default single-vehicle config
-- `config_1.yaml`: namespaced `/px4_1/*` config
-- `config_oa.yaml`: MPC obstacle-avoidance config
+If you prefer to interact with the agent via a notebook instead of the full pipeline:
 
-## Start Simulation
-
-Recommended launcher:
+#### 4.1 Install the kernel
 
 ```bash
-cd ${Path2Project}/DroneTracking
-./tools/simdrone_single.sh
+conda activate mpcc
+python -m ipykernel install --user --name simdrone_env --display-name "Python (SimDrone)"
 ```
 
-It starts a tmux session with:
+#### 4.2 Edit the kernel launcher config
 
-- `rviz2 -d tools/layout.rviz`
-- `python isaacsim/tf_tree.py`
-- `isaac_run isaacsim/sim_single.py`
-- `MicroXRCEAgent udp4 -p 8888`
-- QGroundControl
+Edit `~/.local/share/jupyter/kernels/simdrone_env/kernel.json` with the following content:
 
-Manual startup:
+```json
+{
+ "argv": [
+  "bash",
+  "/path/to/DroneTracking/tools/simdrone_env_ipynb_wrapper.sh",
+  "-f",
+  "{connection_file}"
+ ],
+ "display_name": "Python (SimDrone)",
+ "language": "python",
+ "metadata": {
+  "debugger": true
+ },
+ "kernel_protocol_version": "5.5"
+}
+```
+
+> **Note**: Make sure the wrapper script is executable:
+> ```bash
+> chmod +x /path/to/DroneTracking/tools/simdrone_env_ipynb_wrapper.sh
+> ```
+
+#### 4.3 Open the notebook
 
 ```bash
-cd ${Path2Project}/DroneTracking
-source ./tools/simdrone_env.sh
-isaac_run isaacsim/sim_single.py
-MicroXRCEAgent udp4 -p 8888
-./QGroundControl-x86_64.AppImage
+jupyter notebook test_agent.ipynb
 ```
 
-Waypoint and scene selection:
+Or in VS Code, open [`test_agent.ipynb`](./test_agent.ipynb) and select the `Python (SimDrone)` kernel.
 
-```bash
-isaac_run isaacsim/sim_single.py --list-tasks
-isaac_run isaacsim/sim_single.py --list-scenes
-isaac_run isaacsim/sim_single.py --task-index 0 --scene-index 0
+---
+
+## Project Structure
+
+```
+embodied_agent/
+├── __init__.py
+├── base_control.py          # Abstract controller interface
+├── ros2_control.py          # ROS2 bridge (InfoNode + NavigationNode)
+├── spf_agent.py             # LangGraph agent definition
+├── spf_geometry.py          # Camera geometry utilities
+├── spf_navigation_prompts.py# SPF prompts & schemas
+└── spf_tools.py             # LangChain tools (get_view, navigate, rotate)
 ```
 
-`sim_single.py` loads waypoint files from `plan2track/waypoints/` and scene files
-from `scenes/*.txt`. Selecting the `behavior1k` scene source loads a USD scene
-from `scenes/behavior1k/` and samples a random spawn point from the occupancy
-map; task selection is skipped for `behavior1k`.
+[`ros2_control.py`](./embodied_agent/ros2_control.py) implements two ROS2 nodes:
 
-Behavior1k examples:
-
-```bash
-isaac_run isaacsim/sim_single.py --scene-source behavior1k --list-scenes
-isaac_run isaacsim/sim_single.py --scene-source behavior1k --scene-index 0
-```
-
-`tools/simdrone_single.sh` sources `tools/export_mtl.sh` before starting Isaac
-Sim so behavior1k material paths are available.
-
-## Start Controller
-
-Tracking only:
-
-```bash
-cd ${Path2Project}/DroneTracking
-./tools/run_code.sh
-./tools/run_code.sh dronecnt cfg_visual.yaml
-```
-
-Obstacle-avoidance stack:
-
-```bash
-cd ${Path2Project}/DroneTracking
-./tools/run_oa_code.sh
-./tools/run_oa_code.sh dronecnt config_0.yaml
-```
-
-`run_code.sh` starts:
-
-- `python plan2track/plan2track.py`
-- `python -m fsm.fsm_main`
-- `python -m fsm.fsm_interface`
-
-`run_oa_code.sh` starts the same controller panes and additionally starts:
-
-- `python perception/depth2scan.py`
-
-Manual startup:
-
-```bash
-cd ${Path2Project}/DroneTracking
-source ./tools/simdrone_env.sh
-export DRONE_TRACKING_CONFIG=config_0.yaml
-
-python plan2track/plan2track.py
-python -m fsm.fsm_main
-python -m fsm.fsm_interface
-python perception/depth2scan.py --ros-args \
-  -p depth_topic:=/depth \
-  -p scan_topic:=/depth2scan/scan \
-  -p points_topic:=/depth2scan/points \
-  -p frame_id:=drone_fpv_camera \
-  -p config_path:=$PWD/perception/yaml/depth_transform.yaml
-```
-
-## FSM Commands
-
-Use `python -m fsm.fsm_interface` for interactive commands:
-
-- `prepare`
-- `takeoff`
-- `execute`
-- `return`
-- `land`
-- `abort`
-- `help`
-- `state`
-- `quit`
-
-## Planning Data
-
-Waypoint files for tracking live under:
-
-```text
-plan2track/waypoints/
-```
-
-Minimum-snap task/control files live under:
-
-```text
-plan2track/tasks/
-```
-
-Generate waypoints with:
-
-```bash
-python plan2track/generate_waypoints.py
-```
-
-The selected waypoint file is configured by:
-
-```yaml
-plan2track:
-  path:
-    file: plan2track/waypoints/line_waypoint.txt
-```
-
-## Perception
-
-`perception/depth2scan.py` converts a ROS depth image into:
-
-- `sensor_msgs/LaserScan` on `/depth2scan/scan`
-- `sensor_msgs/PointCloud2` on `/depth2scan/points`
-
-The depth conversion config is:
-
-```text
-perception/yaml/depth_transform.yaml
-```
-
-Current assumptions:
-
-- Isaac Sim depth image is `32FC1` in meters
-- horizontal FOV is 90 deg
-- scan bins are angular buckets over the camera horizontal FOV
-- max-range points are published as `inf` in `LaserScan` and are ignored by the
-  obstacle-avoidance controller
-
-## Controllers
-
-The runtime controller is selected by:
-
-```yaml
-runtime:
-  controller: mpc
-  solver: osqp
-```
-
-Supported controller families:
-
-- `mpc`: OSQP tracking MPC
-- `mpcc`: MPCC tracker
-
-When `tracking.hocbf.enabled` is true and depth scan points are available, the
-MPC path tracker adds HOCBF obstacle-avoidance constraints. Without valid depth
-scan points, it behaves as the normal tracking MPC.
-
-Relevant YAML sections:
-
-- `runtime`: controller and solver selection
-- `topics`: FSM, planning, tracking, PX4, and perception ROS topics
-- `vehicle`: PX4 target system and offboard publication switch
-- `fsm`: FSM logging, takeoff, and auto-land behavior parameters
-- `plan2track`: waypoint file, loading mode, loop mode, fixed yaw, and initial yaw
-- `tracking.mpc`: horizon, timestep, and reference speed
-- `tracking.mpc.cost`: MPC cost weights
-- `tracking.mpcc`: MPCC cost weights and progress limits
-- `tracking.control_loop`: controller timer period
-- `tracking.yaw`: yaw gain and yaw-rate limit
-- `tracking.ctbr`: body-rate/thrust conversion parameters
-- `tracking.accel_fusion`: acceleration smoothing
-- `tracking.constraints`: MPC state/input bounds
-- `tracking.hocbf`: camera offset, safety radius, gains, and slack weight
-
-## Coordinate Notes
-
-- Isaac Sim uses an ENU world frame.
-- Waypoint text files are loaded as NED and converted to ENU by planning and
-  simulation utilities.
-- `origin_mode: fixed` keeps the waypoint-file origin fixed.
-- `origin_mode: first_xy` shifts the path so the first waypoint has local
-  `x/y = 0/0`.
-- `fixed_yaw: true` publishes `init_yaw` as the yaw command.
-- `fixed_yaw: false` publishes path-tangent yaw.
-
-## Key Files
-
-- `isaacsim/sim_single.py`: single-vehicle Isaac Sim app
-- `isaacsim/sim_utils.py`: scene, waypoint marker, and behavior1k helpers
-- `isaacsim/tf_tree.py`: ROS TF tree publisher
-- `plan2track/plan2track.py`: waypoint/path bridge for MPC/MPCC tracking
-- `plan2track/generate_waypoints.py`: minimum-snap waypoint generation helper
-- `perception/depth2scan.py`: depth image to pseudo LaserScan converter
-- `tracking/tracking_cnt.py`: controller step, CTBR conversion, and yaw-rate logic
-- `tracking/tracking_osqp.py`: OSQP MPC/HOCBF solver implementation
-<<<<<<< HEAD
-- `tracking/tracking_ros.py`: PX4 ROS message bridge
-=======
->>>>>>> 66427e1 (add obstacle avoidance)
-- `fsm/fsm_main.py`: FSM node startup
-- `fsm/fsm_node.py`: FSM ROS node and transition coordinator
-- `fsm/fsm_mpc.py`: MPC/MPCC behavior and tracker command publication
-- `fsm/fsm_interface.py`: interactive FSM terminal
-- `yamls/config.py`: YAML config loader
-- `yamls/*.yaml`: runtime configs
+- **`InfoNode`** — Receives camera feed, position, and attitude; provides the agent's perception.
+- **`NavigationNode`** — Publishes reference trajectories and yaw commands to the MPC tracking system.
