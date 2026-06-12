@@ -108,7 +108,7 @@ def get_target_object(instruction: str):
         return "Target not found. Try to rotate perspective, analyze the camera view directly or analyze previous actions."
 
     spf_geometry = _control.spf_geometry
-    norm_y, norm_x = response.point
+    norm_x, norm_y = response.point
     pixel_x = (norm_x / 1000.0) * spf_geometry.width
     pixel_y = (norm_y / 1000.0) * spf_geometry.height
 
@@ -123,9 +123,10 @@ def get_target_object(instruction: str):
     rot = state["rotation"]
     yaw_rad = math.radians(rot["yaw"])
 
-    world_x = pos["x"] + (sx * math.cos(yaw_rad) + sy * math.sin(yaw_rad))
-    world_y = pos["y"] + (-sx * math.sin(yaw_rad) + sy * math.cos(yaw_rad))
-    world_z = pos["z"] + sz  
+    world_x = pos["x"] + (sx * math.sin(yaw_rad) + sy * math.cos(yaw_rad))
+    world_y = pos["y"] + (-sx * math.cos(yaw_rad) + sy * math.sin(yaw_rad))
+    # world_z = pos["z"] + sz  
+    world_z = pos["z"]
 
     return (
         f"Target '{instruction}' found at world coordinates: "
@@ -183,7 +184,17 @@ class RotateInput(BaseModel):
 @tool(args_schema=RotateInput)
 def rotate(yaw: float) -> str:
     """
-    Set agent orientation (yaw). Only multiples of 30 degrees are valid and effective.
+    Set agent absolute yaw orientation in degrees.
+    
+    Yaw convention (ENU):
+    - 0°=East, 90°=North, 180°=West, 270°=South
+    - Increase yaw = turn LEFT (CCW):  90→180→270
+    - Decrease yaw = turn RIGHT (CW): 180→90→0
+    
+    To look RIGHT of current heading: use a SMALLER yaw value
+    To look LEFT of current heading:  use a LARGER yaw value
+    
+    Only multiples of 30° are accepted (auto-rounded).
     """
     if _control is None:
         raise Exception("Error: Environment controller is not initialized. Call init_env() first.")

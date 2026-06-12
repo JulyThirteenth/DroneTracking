@@ -12,13 +12,13 @@ from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path as NavPath
 from std_msgs.msg import Float32, String
 
-from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 
 from .base_control import BaseControl, NavTarget, NavResult, AgentState
 import atexit
 
 from tracking.tracking_utils import ned_to_enu, yaw_ned_to_enu, wrap_pi, is_finite_vec3
-from tracking.tracking_ros import TOPIC_VEHICLE_LOCAL_POSITION, qos_px4_out
+from fsm.fsm_ros import TOPIC_VEHICLE_LOCAL_POSITION, latched_qos
 from fsm.fsm_ros import latched_qos
 from yamls.config import get_cfg
 _CFG = get_cfg()
@@ -42,6 +42,13 @@ NAV_SPEED = 1.0       # 导航速度（m/s）
 EXPIRE_TIME = 1.0       # 缓存的画面或位置的过期时间
 GET_VIEW_TIMEOUT = 5.0    # 获取相机画面超时（秒）
 GET_STATE_TIMEOUT = 5.0   # 获取位置状态超时（秒）
+
+qos_px4_out = QoSProfile(
+    reliability=ReliabilityPolicy.BEST_EFFORT,
+    durability=DurabilityPolicy.VOLATILE,
+    history=HistoryPolicy.KEEP_LAST,
+    depth=10,
+)
 
 class InfoNode(Node):
     def __init__(self):
@@ -171,8 +178,8 @@ class NavigationNode(Node):
     def __init__(self):
         super().__init__("navigation_node")
 
-        self._frame_id = str(_CFG.plan2track.frame_id)
-        self._target_z = float(_CFG.fsm.takeoff_height)
+        self._frame_id = str(_CFG.plan2track.path.frame_id)
+        self._target_z = float(_CFG.fsm.takeoff.height)
         self._dt = float(_CFG.tracking.get("mpc", {}).get("dt", 0.1))
         self._horizon = int(_CFG.tracking.get("mpc", {}).get("horizon", 15))
         self._nav_speed = NAV_SPEED
@@ -205,15 +212,15 @@ class NavigationNode(Node):
         )
         self.create_subscription(
             String,
-            str(_CFG.fsm.state_topic),
+            str(_CFG.topics.fsm.state),
             self._on_fsm_state,
             latched_qos(1),
         )
         self._pub_ref = self.create_publisher(
-            NavPath, str(_CFG.plan2track.ref_path_topic), 10
+            NavPath, str(_CFG.topics.tracking.ref_traj_path), 10
         )
         self._pub_yaw = self.create_publisher(
-            Float32, str(_CFG.plan2track.yaw_cmd_topic), 10
+            Float32, str(_CFG.topics.planning.yaw_cmd_enu), 10
         )
         self.create_timer(NAV_PUBLISH_DT, self._tick_run)
         self.create_timer(TICK_LOG_INTERVAL, self._tick_log)

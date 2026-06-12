@@ -13,7 +13,7 @@ class SPFActionSchema(BaseModel):
     success: bool = Field(
         description="True if the target object is found and reachable, False otherwise."
     )
-    point: tuple[int, int] = Field(description="The [y, x] pixel coordinates in a 0-1000 scale. [500, 500] is the center.")
+    point: tuple[int, int] = Field(description="The [x, y] pixel coordinates in a 0-1000 scale. [500, 500] is the center.")
     depth: int = Field(ge=1, le=10, description="Discrete depth label from 1 (very close) to 10 (very far).")
     label: str = Field(description="A natural language description of the specific action being taken.")
     obstacles: list[Obstacle] = Field(
