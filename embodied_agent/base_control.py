@@ -27,6 +27,7 @@ class NavResult(TypedDict):
     success: bool
     position: Point3D | None
     yaw: float
+    reason: str
 
 
 class AgentState(TypedDict):

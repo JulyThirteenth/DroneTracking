@@ -23,8 +23,6 @@ from fsm.fsm_ros import latched_qos
 from yamls.config import get_cfg
 _CFG = get_cfg()
 
-NAV_TIMEOUT = 60.0
-ROTATE_TIMEOUT = 60.0
 NAV_PUBLISH_DT = 0.02
 TICK_LOG_INTERVAL = 1.0   # 日志打印间隔
 
@@ -34,6 +32,7 @@ STATE_TRACKING = "tracking"
 ARRIVAL_XY = 0.02
 ARRIVAL_Z = 0.02
 ARRIVAL_YAW = 0.05
+MIN_DIST_IN_NAV = 0.02 # 导航时每秒移动的最小距离，小于时认为被阻塞
 
 # ---------- 导航 ----------
 NAV_SPEED = 1.0       # 导航速度（m/s）
@@ -42,6 +41,10 @@ NAV_SPEED = 1.0       # 导航速度（m/s）
 EXPIRE_TIME = 1.0       # 缓存的画面或位置的过期时间
 GET_VIEW_TIMEOUT = 5.0    # 获取相机画面超时（秒）
 GET_STATE_TIMEOUT = 5.0   # 获取位置状态超时（秒）
+NAV_TIMEOUT = 60.0 # 导航超时
+ROTATE_TIMEOUT = 60.0 # 旋转超时
+BLOCKED_TIMEOUT = 5.0 # 导航时，被障碍物阻挡导致停滞的超时（秒）
+
 
 qos_px4_out = QoSProfile(
     reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -204,6 +207,10 @@ class NavigationNode(Node):
 
         self._nav_event = threading.Event()
 
+        self._min_dist = float("inf")       # 本次移动中达到的最小距离
+        self._last_progress_time = 0.0       # 上次距离有明显减小的时刻
+        self._nav_fail_reason = ""
+
         self.create_subscription(
             VehicleLocalPosition,
             TOPIC_VEHICLE_LOCAL_POSITION,
@@ -335,6 +342,20 @@ class NavigationNode(Node):
 
         self._publish_refs(points)
         self._publish_yaw(self._target_yaw)
+
+        now = time.time()
+        if dist_xy < self._min_dist - MIN_DIST_IN_NAV:
+            self._min_dist = dist_xy
+            self._last_progress_time = now
+        if (now - self._last_progress_time > BLOCKED_TIMEOUT
+                and self._min_dist > self._arrival_xy):
+            self._nav_fail_reason = "blocked_by_obstacle"
+            self.get_logger().warn(
+                f"检测到阻塞！停滞{now - self._last_progress_time:.1f}s"
+            )
+            self._nav_event.set()
+            return
+
         if dist_xy < self._arrival_xy and dz < self._arrival_z:
             self.get_logger().info("已到达目标点")
             self._nav_event.set()
@@ -378,10 +399,13 @@ class NavigationNode(Node):
     def _make_nav_result(self, success: bool) -> NavResult:
         p = self._position_enu
         yaw_deg = math.degrees(self._yaw_enu) % 360
+        reason = self._nav_fail_reason
+        self._nav_fail_reason = ""
         return {
             "success": success,
             "position": None if p is None else {"x": float(p[0]), "y": float(p[1]), "z": float(p[2])},
             "yaw": yaw_deg,
+            "reason": reason,
         }
 
     def _rotate_to_yaw(self, target_yaw: float) -> bool:
@@ -403,6 +427,7 @@ class NavigationNode(Node):
         arrived = self._nav_event.wait(timeout=ROTATE_TIMEOUT)
         if not arrived:
             self.get_logger().error(f"偏航旋转超时")
+            self._nav_fail_reason = "timeout"
             self._go_hold()
             return False
         return True
@@ -425,10 +450,18 @@ class NavigationNode(Node):
         self._internal_state = self.MOVING
         self._target_pos = target_pos
         self._target_yaw = move_yaw
+        self._nav_fail_reason = ""
+        self._min_dist = dist_xy
+        self._last_progress_time = time.time()
         self._nav_event.clear()
 
         arrived = self._nav_event.wait(timeout=NAV_TIMEOUT)
+        if self._nav_fail_reason:
+            self.get_logger().error(f"导航失败: {self._nav_fail_reason}")
+            self._go_hold()
+            return False
         if not arrived:
+            self._nav_fail_reason = "timeout"
             self.get_logger().error(f"导航超时（{NAV_TIMEOUT}s）")
             self._go_hold()
             return False
@@ -441,11 +474,12 @@ class NavigationNode(Node):
                 f"FSM 状态为 '{self._fsm_state}'，"
                 f"需要 'tracking' 状态才能执行导航。请先执行 'execute' 命令。"
             )
+            self._nav_fail_reason = "fsm_not_tracking"
             return self._make_nav_result(False)
 
         if self._position_enu is None:
             self.get_logger().error("尚未获取到无人机位置")
-            return {"success": False, "position": None, "yaw": 0.0}
+            return {"success": False, "position": None, "yaw": 0.0, "reason": "drone_location_is_missing"}
 
         target_pos = np.array(
             [float(target["x"]), float(target["y"]), float(target["z"])]
@@ -475,11 +509,12 @@ class NavigationNode(Node):
                 f"FSM 状态为 '{self._fsm_state}'，"
                 f"需要 'tracking' 状态才能执行旋转。请先执行 'execute' 命令。"
             )
+            self._nav_fail_reason = "fsm_not_tracking"
             return self._make_nav_result(False)
 
         if self._position_enu is None:
             self.get_logger().error("尚未获取到无人机位置")
-            return {"success": False, "position": None, "yaw": 0.0}
+            return {"success": False, "position": None, "yaw": 0.0, "reason": "drone_location_is_missing"}
 
         if not self._rotate_to_yaw(target_yaw_rad):
             self.get_logger().error("旋转失败")

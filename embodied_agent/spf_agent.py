@@ -19,7 +19,7 @@ get_target_object is ONLY for getting precise 3D coordinates of an ALREADY-VISIB
 1. If the target is visible, call get_target_object to obtain world (x,y,z)
 2. Call navigate_to_point with those exact coordinates (z locked to current altitude)
 3. After navigation, verify with get_current_view — target must be centered
-4. If not centered, adjust (rotate or small move) until perfectly centered
+4. If not centered, adjust (rotate) until perfectly centered
 5. Confirm arrival with scene description."""
 
 

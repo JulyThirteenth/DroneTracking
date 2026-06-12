@@ -74,9 +74,19 @@ def get_current_position_and_rotation():
     state = _control.get_agent_state()
     pos = state["position"]
     rot = state["rotation"]
+
+    yaw_rad = math.radians(rot["yaw"] % 360)
+    fx = math.cos(yaw_rad)
+    fy = math.sin(yaw_rad)
+    dirs = ["E", "NE", "N", "NW", "W", "SW", "S", "SE"]
+    d = dirs[round(rot["yaw"] % 360 / 45) % 8]
+
     return (
-        f"Current state: position(x={pos['x']:.3f}, y={pos['y']:.3f}, z={pos['z']:.3f}), "
-        f"rotation(roll={rot['roll']:.3f}, pitch={rot['pitch']:.3f}, yaw={rot['yaw']:.3f})"
+        f"Position: x={pos['x']:.3f}(E) y={pos['y']:.3f}(N) z={pos['z']:.3f}(Up). "
+        f"Yaw: {rot['yaw']:.1f}° ≈ {d}. "
+        f"Forward vector: ({fx:.2f}, {fy:.2f}) — "
+        f"right is ({fy:.2f}, {-fx:.2f}). "
+        f"(↑yaw=left/CCW, ↓yaw=right/CW)"
     )
 
 class GetTargetInput(BaseModel):
@@ -86,8 +96,13 @@ class GetTargetInput(BaseModel):
 @tool(args_schema=GetTargetInput)
 def get_target_object(instruction: str):
     """
-    Locate a target object in the current environment and return its 3D world coordinates.
-    This tool AUTOMATICALLY captures the current view; do NOT call get_current_view before this.
+    Get 3D world coordinates of a target that is ALREADY VISIBLE in the current camera view.
+    
+    PREREQUISITE: You MUST first call get_current_view and visually confirm the target
+    is in the frame. NEVER call this tool blindly — it will waste time and fail if the
+    target is not visible.
+
+    Use this ONLY when you are ready to navigate to a confirmed-visible target.
     """
     if _control is None:
         raise Exception("Error: Environment controller is not initialized. Call init_env() first.")
@@ -144,7 +159,13 @@ class NavigateInput(BaseModel):
 @tool(args_schema=NavigateInput)
 def navigate_to_point(x: float, y: float, z: float) -> str:
     """
-    Move the agent to (x, y, z).
+    Move the agent to a specific world coordinate (ENU: x=East, y=North, z=Up).
+
+    CRITICAL RULES:
+    - NEVER call navigate_to_point with arbitrary coordinates — ONLY use exact values from get_target_object, OR small adjustments (<0.5m from current position) to fine-tune after a failed navigation.
+    - NEVER invent or guess coordinates for exploration.
+    - NEVER use navigate for "getting a better view" — use rotate instead.
+    - z should always match current altitude (use get_current_position_and_rotation).
     """
     if _control is None:
         raise Exception("Error: Environment controller is not initialized. Call init_env() first.")
@@ -171,8 +192,17 @@ def navigate_to_point(x: float, y: float, z: float) -> str:
             f"To B(x={end_x:.2f}, y={end_y:.2f}, z={end_z:.2f}, yaw={end_yaw:.2f}°)."
         )
     else:
+        reason = result.get("reason")
+        if reason == "fsm_not_tracking":
+            hint = "FSM not in tracking state. Tell user to run 'execute' command in fsm_interface terminal."
+        elif reason == "blocked_by_obstacle":
+            hint = "Blocked by obstacle. Check if target is already reached via get_current_view and describe how close it is. If NOT reached, you MUST call rotate to scan, then try to nav again."
+        elif reason == "timeout":
+            hint = "Navigation timed out. Check if target is already reached via get_current_view and describe how close it is. If NOT reached, you MUST call rotate to scan, then try to nav again."
+        else:
+            hint = reason
         return (
-            f"Navigation failed. Current position: "
+            f"Navigation failed: {hint}. Current position: "
             f"(x={end_x:.2f}, y={end_y:.2f}, z={end_z:.2f}, yaw={end_yaw:.2f}°)."
         )
 
@@ -215,7 +245,14 @@ def rotate(yaw: float) -> str:
             f"From yaw={start_yaw:.2f}° To yaw={end_yaw:.2f}°."
         )
     else:
-        return f"Rotation failed. Current yaw: {end_yaw:.2f}°."
+        reason = result.get("reason")
+        if reason == "fsm_not_tracking":
+            hint = "FSM not in tracking state. Tell user to run 'execute' command in fsm_interface terminal."
+        elif reason == "timeout":
+            hint = "Rotation timed out. Try again."
+        else:
+            hint = reason
+        return f"Rotation FAILED: {hint} Current yaw: {end_yaw:.2f}°."
 
 
 TOOLS_LIST = [
