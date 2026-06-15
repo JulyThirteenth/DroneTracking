@@ -18,5 +18,6 @@ dependencies:
       - langchain-openai
       - langchain-google-genai
       - pillow
+      - opencv-python
       - python-dotenv
       - ipykernel
