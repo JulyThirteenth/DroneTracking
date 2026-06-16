@@ -7,6 +7,25 @@ from typing import Callable, Optional, Literal
 import numpy as np
 import cv2
 from PIL import Image
+import unicodedata
+
+def _wrap_cjk(text: str, width: int) -> list[str]:
+    lines = []
+    for l in text.split('\n'):
+        if not l.strip():
+            continue
+        cur, cur_w = "", 0
+        for ch in l:
+            ch_w = 2 if unicodedata.east_asian_width(ch) in ('F', 'W') else 1
+            if cur_w + ch_w > width and cur:
+                lines.append(cur)
+                cur, cur_w = ch, ch_w
+            else:
+                cur += ch
+                cur_w += ch_w
+        if cur:
+            lines.append(cur)
+    return lines or [""]
 
 
 class TaskRecorder:
@@ -180,7 +199,7 @@ class TaskRecorder:
                 paragraphs = [p for p in txt.split('\n') if p.strip()]
                 
                 for i, paragraph in enumerate(paragraphs):
-                    wrapped = textwrap.wrap(paragraph, width=90) or [""]
+                    wrapped = _wrap_cjk(paragraph, width=86)
                     for j, line_str in enumerate(wrapped):
                         if i == 0 and j == 0:
                             lines_info.append({"text": f"{pfx} {line_str}", "is_active": is_active})
