@@ -65,6 +65,25 @@ IMPORTANT:
 - The waypoint must be in FREE SPACE to avoid collisions
 - Accuracy in bounding box placement is critical for safety"""
 
+NAV_IMAGE_USER_PROMPT_TEMPLATE = """Task: {instruction}
+Navigation-only mode: the output obstacles should be an empty list.
+
+Instructions:
+1. The FIRST image is the TARGET — the object or the scene you need to find.
+2. The SECOND image is the CURRENT VIEW from the drone's camera.
+3. Compare both images. If the SAME object or scene from the target image is visible in the current view,
+   place a single point DIRECTLY ON the center of that object.
+4. If the target is NOT visible, set success=False.
+
+Coordinate System:
+- x: 0-1000 scale (0=left, 500=center, 1000=right)
+- y: 0-1000 scale (0=top/sky, 500=center, 1000=bottom/ground)
+- depth: 1-10 scale based on the relative size/distance of the object in the frame.
+
+IMPORTANT:
+- Set success=True ONLY if the exact same object/scene is visible in both images.
+- Place the point PRECISELY on the center of the matching object.
+- Accuracy in point placement is critical for navigation success."""
 
 def create_spf_prompt(avoid_obstacles: bool = False):
     user_template = NAV_OBSTABLE_USER_PROMPT_TEMPLATE if avoid_obstacles else NAV_USER_PROMPT_TEMPLATE
@@ -73,5 +92,17 @@ def create_spf_prompt(avoid_obstacles: bool = False):
         ("human", [
             {"type": "text", "text": user_template},
             {"type": "image_url", "image_url": "{image_url}"}
+        ])
+    ])
+
+def create_image_match_prompt():
+    return ChatPromptTemplate.from_messages([
+        ("system", NAV_SYSTEM_PROMPT),
+        ("human", [
+            {"type": "text", "text": "TARGET IMAGE:"},
+            {"type": "image_url", "image_url": "{target_url}"},
+            {"type": "text", "text": "CURRENT VIEW:"},
+            {"type": "image_url", "image_url": "{image_url}"},
+            {"type": "text", "text": NAV_IMAGE_USER_PROMPT_TEMPLATE},
         ])
     ])

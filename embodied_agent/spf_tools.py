@@ -15,7 +15,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from pydantic import BaseModel, Field
 
 from .base_control import BaseControl, NavTarget
-from .spf_navigation_prompts import create_spf_prompt, SPFActionSchema
+from .spf_navigation_prompts import create_spf_prompt, create_image_match_prompt, SPFActionSchema
 
 _control: BaseControl | None = None
 _sub_llm: BaseChatModel | None = None
@@ -34,6 +34,8 @@ def init_env(control: BaseControl, sub_llm: BaseChatModel):
 def _encode_image(image: Image.Image) -> str:
     """Encode a PIL Image to a base64 string."""
     buffered = BytesIO()
+    if image.mode in ("RGBA", "P", "LA"):
+        image = image.convert("RGB")
     image.save(buffered, format="JPEG")
     return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
@@ -91,16 +93,26 @@ def get_current_position_and_rotation():
 
 class GetTargetInput(BaseModel):
     instruction: str = Field(description="Description of the target object to locate.")
+    image_path: str = Field(default="", description=
+                            "Optional path to a target image on disk. When provided, the VLM will "
+                            "match this image against the current camera view instead of using the "
+                            "text instruction alone.")
 
 
 @tool(args_schema=GetTargetInput)
-def get_target_object(instruction: str):
+def get_target_object(instruction: str, image_path: str=""):
     """
     Get 3D world coordinates of a target that is ALREADY VISIBLE in the current camera view.
     
     PREREQUISITE: You MUST first call get_current_view and visually confirm the target
     is in the frame. NEVER call this tool blindly — it will waste time and fail if the
     target is not visible.
+
+    Parameters:
+    - instruction: Text description of the target.
+    - image_path:   (OPTIONAL) Path to a target image file. When provided, the VLM
+                    compares this image against the current camera view to locate the
+                    target. When empty, the VLM uses the text instruction only.
 
     Use this ONLY when you are ready to navigate to a confirmed-visible target.
     """
@@ -113,10 +125,24 @@ def get_target_object(instruction: str):
     img_url = f"data:image/jpeg;base64,{_encode_image(img)}"
 
     structured_llm = _sub_llm.with_structured_output(SPFActionSchema)
-    prompt_value = create_spf_prompt().invoke({
-        "instruction": instruction,
-        "image_url": img_url
-    })
+
+    if image_path and image_path.strip():
+        try:
+            target_img = Image.open(image_path.strip())
+        except FileNotFoundError:
+            return f"Error: Target image not found at path '{image_path}'."
+        target_url = f"data:image/jpeg;base64,{_encode_image(target_img)}"
+        prompt_value = create_image_match_prompt().invoke({
+            "instruction": instruction,
+            "target_url": target_url,
+            "image_url": img_url,
+        })
+    else:
+        prompt_value = create_spf_prompt().invoke({
+            "instruction": instruction,
+            "image_url": img_url,
+        })
+
     response = cast(SPFActionSchema, structured_llm.invoke(prompt_value))
 
     if not response.success:
@@ -254,10 +280,30 @@ def rotate(yaw: float) -> str:
             hint = reason
         return f"Rotation FAILED: {hint} Current yaw: {end_yaw:.2f}°."
 
+class LoadImageInput(BaseModel):
+    image_path: str = Field(description="Path to the image file on disk.")
+
+@tool(args_schema=LoadImageInput)
+def load_image(image_path: str):
+    """
+    Load and display an image from disk. Use this to view a target image
+    provided by the user so you know what to look for during scanning.
+    """
+    try:
+        img = Image.open(image_path.strip())
+    except FileNotFoundError:
+        return f"Error: Image not found at path '{image_path}'."
+
+    b64_str = _encode_image(img)
+    return [
+        {"type": "text", "text": f"Target image loaded from: {image_path}"},
+        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_str}"}}
+    ]
 
 TOOLS_LIST = [
     get_current_view,
     get_target_object,
+    load_image,
     navigate_to_point,
     rotate,
     get_current_position_and_rotation,
