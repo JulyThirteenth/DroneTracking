@@ -10,7 +10,13 @@ controls drone movement via ROS2, using LLM-powered reasoning (SPF — Semantic 
 | **ROS2_CONTROL** — Bridge between agent and ROS2 (navigation / rotation) | ✅ Done |
 | **AGENT Debugging** — Prompt engineering (skill & tool tuning) | ⬜ Not started |
 
-Currently tested via [`test_agent.ipynb`](./test_agent.ipynb).
+- Isaac Sim 5.1 with Pegasus Simulator
+- PX4 1.16 configured in the Pegasus extension
+- ROS 2 Humble on Ubuntu 22.04
+- ROS 2 overlay with `px4_msgs`, sourced by `bash/simdrone_env.sh`
+- Micro XRCE-DDS Agent for forwarding PX4 uORB topics to ROS 2
+- Optional: `tmux` for one-command launch scripts
+- Optional: QGroundControl, configured by `QGC_PATH` in the launch bash scripts
 
 ---
 
@@ -21,7 +27,8 @@ LLM settings are loaded from a `.env` file in the project root via [`load_dotenv
 Copy the template and fill in your API key:
 
 ```bash
-cp .env.example .env
+cd ${Path2Project}/DroneTracking
+source ./bash/simdrone_env.sh
 ```
 
 | Variable | Description | Default |
