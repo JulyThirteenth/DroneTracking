@@ -41,10 +41,14 @@ DEPTH_SCAN_CONFIG="${DEPTH_SCAN_CONFIG:-${PROJECT_DIR}/perception/yaml/depth_tra
 
 tmux send-keys -t "${P_PLAN}" \
 <<<<<<< HEAD
+<<<<<<< HEAD
 "cd \"${PROJECT_DIR}\" && source ./bash/simdrone_env.sh && ${ENV_PREFIX}python plan2track/vel2track.py" C-m
 =======
 "cd \"${PROJECT_DIR}\" && source ./bash/simdrone_env.sh && ${ENV_PREFIX}python plan2track/keyboard2track.py" C-m
 >>>>>>> b90f7fc (优化输出视频中的中文换行。)
+=======
+"cd \"${PROJECT_DIR}\" && source ./bash/simdrone_env.sh && ${ENV_PREFIX}python plan2track/vel2track.py" C-m
+>>>>>>> 8a29992 (dev obstacle avoidance: tidy code)
 
 tmux send-keys -t "${P_FSM_NODE}" \
 "cd \"${PROJECT_DIR}\" && source ./bash/simdrone_env.sh && ${ENV_PREFIX}python -m fsm.fsm_main" C-m
