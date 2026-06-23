@@ -1,84 +1,206 @@
 from pathlib import Path
-import random
-import sys
 import numpy as np
-from PIL import Image
-from scipy.ndimage import distance_transform_edt
 from scipy.spatial.transform import Rotation
-import yaml
-
-_ROOT = Path(__file__).resolve().parent.parent
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
-
-from tracking.tracking_utils import load_waypoints_ned, ned_to_enu
 
 
-def read_scene_list(path: Path) -> list[Path]:
-    if not path.exists():
-        raise FileNotFoundError(f"scene list not found: {path}")
-    out: list[Path] = []
-    for raw in path.read_text(encoding="utf-8").splitlines():
+DEFAULT_SPAWN_ENU = [0.0, 0.0, 0.07]
+
+
+def prompt_index(*, count: int, prompt: str) -> int:
+    while True:
+        raw = input(prompt).strip()
+        try:
+            idx = int(raw)
+        except ValueError:
+            print("Please input an integer.")
+            continue
+        if 0 <= idx < count:
+            return idx
+        print(f"Index out of range: {idx} (0..{count - 1})")
+
+
+def resolve_scene_path(path: Path, *, script_dir: Path) -> Path:
+    if path.is_absolute():
+        return path.resolve()
+
+    for candidate in (
+        path.resolve(),
+        (script_dir / path).resolve(),
+        (script_dir.parent / path).resolve(),
+    ):
+        if candidate.exists():
+            return candidate
+    return path.resolve()
+
+
+def spawn_position_from_arg(spawn: list[float] | None) -> list[float]:
+    return [float(v) for v in (spawn or DEFAULT_SPAWN_ENU)]
+
+
+def select_txt_scene(
+    scene_arg: Path,
+    *,
+    scene_index: int | None,
+    list_scenes: bool,
+    script_dir: Path,
+) -> Path | None:
+    return select_txt_file(
+        scene_arg,
+        file_index=scene_index,
+        list_files=list_scenes,
+        script_dir=script_dir,
+        title="Scenes dir",
+        prompt="Select scene index: ",
+        missing_message="No txt scene files found under",
+        unsupported_message="unsupported txt scene path",
+    )
+
+
+def select_waypoint_file(
+    waypoints_arg: Path,
+    *,
+    waypoint_index: int | None,
+    list_waypoints: bool,
+    script_dir: Path,
+) -> Path | None:
+    return select_txt_file(
+        waypoints_arg,
+        file_index=waypoint_index,
+        list_files=list_waypoints,
+        script_dir=script_dir,
+        title="Waypoints dir",
+        prompt="Select waypoint index: ",
+        missing_message="No waypoint txt files found under",
+        unsupported_message="unsupported waypoint path",
+    )
+
+
+def select_txt_file(
+    path_arg: Path,
+    *,
+    file_index: int | None,
+    list_files: bool,
+    script_dir: Path,
+    title: str,
+    prompt: str,
+    missing_message: str,
+    unsupported_message: str,
+) -> Path | None:
+    scene_path = resolve_scene_path(path_arg, script_dir=script_dir)
+
+    if scene_path.is_dir():
+        scene_files = sorted(
+            p
+            for p in scene_path.iterdir()
+            if p.is_file() and p.suffix.lower() == ".txt"
+        )
+        if not scene_files:
+            raise FileNotFoundError(f"{missing_message}: {scene_path}")
+
+        if list_files or file_index is None:
+            print(f"{title}: {scene_path}")
+            for i, txt_path in enumerate(scene_files):
+                print(f"[{i}] {txt_path.name}")
+
+        if list_files:
+            return None
+
+        if file_index is None:
+            file_index = prompt_index(
+                count=len(scene_files),
+                prompt=prompt,
+            )
+        elif file_index < 0 or file_index >= len(scene_files):
+            raise ValueError(
+                f"index out of range: {file_index} (0..{len(scene_files) - 1})"
+            )
+
+        return scene_files[file_index]
+
+    if not scene_path.exists():
+        raise FileNotFoundError(f"path not found: {scene_path}")
+
+    if scene_path.suffix.lower() == ".txt":
+        if list_files:
+            print(f"Txt file: {scene_path}")
+            return None
+        return scene_path
+
+    raise ValueError(f"{unsupported_message}: {scene_path}")
+
+
+def select_behavior1k_scene(
+    scene_root: Path,
+    *,
+    scene_index: int | None,
+    list_scenes: bool,
+    script_dir: Path,
+) -> tuple[Path | None, Path]:
+    root = resolve_scene_path(scene_root, script_dir=script_dir)
+    scenes_file = root / "scenes.txt"
+    if not scenes_file.exists():
+        raise FileNotFoundError(f"behavior1k scenes.txt not found: {scenes_file}")
+
+    scene_files: list[Path] = []
+    for raw in scenes_file.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
+
         scene_path = Path(line)
         if not scene_path.is_absolute():
-            scene_path = path.parent / scene_path
-        out.append(scene_path.resolve())
-    return out
+            scene_path = scenes_file.parent / scene_path
+        if scene_path.exists():
+            scene_files.append(scene_path.resolve())
+
+    if not scene_files:
+        raise FileNotFoundError(f"No behavior1k scene files found under: {root}")
+
+    if list_scenes or scene_index is None:
+        print(f"Behavior1k scenes: {scenes_file}")
+        for i, scene_path in enumerate(scene_files):
+            print(f"[{i}] {scene_path.parent.name}")
+
+    if list_scenes:
+        return None, root / "MTL"
+
+    if scene_index is None:
+        scene_index = prompt_index(
+            count=len(scene_files),
+            prompt="Select behavior1k scene index: ",
+        )
+    elif scene_index < 0 or scene_index >= len(scene_files):
+        raise ValueError(
+            f"scene_index out of range: {scene_index} (0..{len(scene_files) - 1})"
+        )
+
+    return scene_files[scene_index], root / "MTL"
 
 
-def behavior1k_scene_name(scene_usd_path: Path) -> str:
-    return Path(scene_usd_path).parents[1].name
 
 
-def behavior1k_resource_root() -> Path:
-    return Path(__file__).resolve().parent.parent / "scenes" / "behavior1k"
+def as_vec3(value) -> np.ndarray:
+    return np.asarray(value, dtype=float).reshape(3)
 
 
-def discover_behavior1k_scene_files(root: Path) -> list[Path]:
-    scenes_file = root / "scenes.txt"
-    occ_dir = root / "occ_map"
-    return [
-        p
-        for p in read_scene_list(scenes_file)
-        if p.exists() and (occ_dir / f"{behavior1k_scene_name(p)}.yaml").exists()
-    ]
+def ned_to_enu(value) -> np.ndarray:
+    value = as_vec3(value)
+    return np.array([value[1], value[0], -value[2]], dtype=float)
 
 
-def sample_behavior1k_spawn(
-    scene_usd_path: Path,
-    *,
-    clearance_m: float = 1.0,
-    seed: int = 10,
-) -> list[float]:
-    map_name = behavior1k_scene_name(scene_usd_path)
-    yaml_path = behavior1k_resource_root() / "occ_map" / f"{map_name}.yaml"
-    if not yaml_path.exists():
-        raise FileNotFoundError(f"behavior1k occupancy yaml not found: {yaml_path}")
+def load_waypoints_ned(path: Path) -> list[np.ndarray]:
+    waypoints: list[np.ndarray] = []
+    if not path.exists():
+        return waypoints
 
-    cfg = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
-    image_path = yaml_path.parent / str(cfg["image"])
-    occ_img = np.asarray(Image.open(image_path).convert("L"), dtype=np.uint8)
-
-    free = occ_img == 255
-    if not np.any(free):
-        raise RuntimeError(f"behavior1k occupancy map has no free cells: {image_path}")
-
-    resolution = float(cfg["resolution"])
-    candidates = np.argwhere(
-        distance_transform_edt(free) >= max(1.0, clearance_m / resolution)
-    )
-    if candidates.size == 0:
-        candidates = np.argwhere(free)
-
-    row, col = candidates[random.Random(seed).randrange(len(candidates))]
-    origin_x = float(cfg["origin"][0])
-    origin_y = float(cfg["origin"][1])
-    world_x = origin_x + int(col) * resolution
-    world_y = origin_y + (occ_img.shape[0] - 1 - int(row)) * resolution
-    return [float(world_x), float(world_y), 0.07]
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        parts = stripped.replace(",", " ").split()
+        if len(parts) >= 3:
+            waypoints.append(np.asarray(parts[:3], dtype=float))
+    return waypoints
 
 
 def _read_scene_rows(path: Path) -> list[list[str]]:

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# 用法：source ./tools/simulate_env.sh  或  . ./tools/simulate_env.sh
+# 用法：source ./bash/simdrone_env.sh  或  . ./bash/simdrone_env.sh
 
 # 如果你用 bash 执行而不是 source，就提醒
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   echo "ERROR: 请用 source 运行："
-  echo "  source ./tools/simulate_env.sh"
+  echo "  source ./bash/simdrone_env.sh"
   return 1 2>/dev/null || exit 1
 fi
 
@@ -31,4 +31,3 @@ source ~/devspace/FlightSim/px4-ros_ws/install/setup.bash
 echo "[OK] CONDA_DEFAULT_ENV=$CONDA_DEFAULT_ENV"
 echo "[OK] ROS_DISTRO=$ROS_DISTRO"
 echo "[OK] RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-<unset>}"
-

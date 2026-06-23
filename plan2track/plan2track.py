@@ -29,14 +29,8 @@ from std_msgs.msg import Float32
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
-
-
-def _add_project_to_sys_path() -> None:
-    if str(_PROJECT_ROOT) not in sys.path:
-        sys.path.insert(0, str(_PROJECT_ROOT))
-
-
-_add_project_to_sys_path()
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 from tracking.tracking_cfg import DEFAULT_CONFIG, TrackingConfig
 from tracking.tracking_utils import (
@@ -51,7 +45,7 @@ from tracking.tracking_utils import (
     wrap_pi,
     yaw_ned_to_enu,
 )
-from yamls.config import Plan2TrackConfig, get_cfg
+from cfg.config import Plan2TrackConfig, get_cfg
 
 _PROJECT_CFG = get_cfg()
 
@@ -380,7 +374,9 @@ class Plan2TrackNode(Node):
         self.get_logger().info(
             f"Publishing vehicle_pose: {_PROJECT_CFG.topics.tracking.vehicle_pose}"
         )
-        self.get_logger().info(f"Publishing yaw_cmd: {_PROJECT_CFG.topics.planning.yaw_cmd_enu}")
+        self.get_logger().info(
+            f"Publishing yaw_cmd: {_PROJECT_CFG.topics.planning.yaw_cmd_enu}"
+        )
         self.get_logger().info(
             "fixed_yaw=%s init_yaw=%.4f rad"
             % (bool(self._io_cfg.yaw.fixed), float(self._io_cfg.yaw.init))

@@ -2,6 +2,7 @@ from __future__ import annotations
 import math
 import sys
 from pathlib import Path
+from copy import deepcopy
 import numpy as np
 import rclpy
 from rclpy.executors import ExternalShutdownException
@@ -78,6 +79,7 @@ class Depth2ScanNode(Node):
         self.declare_parameter("aggregation", "min")
         self.declare_parameter("n_intervals", 90)
         self.declare_parameter("default_value", 3.0)
+        self.declare_parameter("depth_downsample_factor", 8)
         self.declare_parameter("queue_size", 10)
 
         self._depth_topic = str(self.get_parameter("depth_topic").value)
@@ -89,6 +91,9 @@ class Depth2ScanNode(Node):
         self._scan_count = 0
         self._last_status_depth_count = 0
         self._last_status_scan_count = 0
+        self._depth_downsample_factor = max(
+            int(self.get_parameter("depth_downsample_factor").value), 1
+        )
 
         self._cfg = self._load_config_from_params()
         height = float(self.get_parameter("height").value)
@@ -159,12 +164,13 @@ class Depth2ScanNode(Node):
         self._depth_count += 1
         try:
             depth = _image_to_depth_array(msg)
+            depth = self._downsample_depth_min(depth)
             _, _, angles, dist = depth_layer_scan(
                 depth,
                 height=self._height,
                 cfg=self._cfg,
             )
-            pts_cfg = self._cfg
+            pts_cfg = deepcopy(self._cfg)
             pts_cfg.transform.filter_points = []
             pts, _ = depth_to_filtered_pointcloud(
                 depth,
@@ -188,6 +194,26 @@ class Depth2ScanNode(Node):
         self._pub_scan.publish(self._to_laser_scan(stamp, frame_id, angles, dist))
         self._pub_points.publish(self._to_point_cloud(stamp, frame_id, pts))
         self._scan_count += 1
+
+    def _downsample_depth_min(self, depth: np.ndarray) -> np.ndarray:
+        factor = int(self._depth_downsample_factor)
+        if factor <= 1:
+            return depth
+
+        h, w = depth.shape
+        h2 = (h // factor) * factor
+        w2 = (w // factor) * factor
+        if h2 == 0 or w2 == 0:
+            return depth
+
+        depth_crop = depth[:h2, :w2].astype(np.float32, copy=False)
+        valid = np.isfinite(depth_crop) & (depth_crop > 0.0)
+        safe = np.where(valid, depth_crop, np.inf)
+        pooled = safe.reshape(h2 // factor, factor, w2 // factor, factor).min(
+            axis=(1, 3)
+        )
+        pooled[~np.isfinite(pooled)] = 0.0
+        return pooled.astype(np.float32, copy=False)
 
     def _scan_angles(self) -> np.ndarray:
         fov_x = float(self._cfg.sensor.fov_deg[0])

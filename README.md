@@ -15,15 +15,16 @@ and the conda environment.
 - Isaac Sim 5.1 with Pegasus Simulator
 - PX4 1.16 configured in the Pegasus extension
 - ROS 2 Humble on Ubuntu 22.04
-- `px4-ros_ws` overlay available through `tools/simdrone_env.sh`
-- ROS 2 package: `px4_msgs`
-- Optional: QGroundControl at `~/DroneSimulator/QGroundControl-x86_64.AppImage`
+- ROS 2 overlay with `px4_msgs`, sourced by `bash/simdrone_env.sh`
+- Micro XRCE-DDS Agent for forwarding PX4 uORB topics to ROS 2
+- Optional: `tmux` for one-command launch scripts
+- Optional: QGroundControl, configured by `QGC_PATH` in the launch bash scripts
 
 Load the project environment with:
 
 ```bash
 cd ${Path2Project}/DroneTracking
-source ./tools/simdrone_env.sh
+source ./bash/simdrone_env.sh
 ```
 
 ## Config
@@ -31,21 +32,21 @@ source ./tools/simdrone_env.sh
 Runtime options are loaded from YAML through `DRONE_TRACKING_CONFIG`.
 
 ```bash
-export DRONE_TRACKING_CONFIG=config_0.yaml
-export DRONE_TRACKING_CONFIG=config_1.yaml
-export DRONE_TRACKING_CONFIG=config_oa.yaml
+export DRONE_TRACKING_CONFIG=cfg_0.yaml
+export DRONE_TRACKING_CONFIG=cfg_1.yaml
+export DRONE_TRACKING_CONFIG=cfg_oa.yaml
 export DRONE_TRACKING_CONFIG=cfg_visual.yaml
 export DRONE_TRACKING_CONFIG=cfg_lidar.yaml
 ```
 
-Relative config names are resolved under `yamls/`; absolute paths also work. If
-unset, `yamls/config_0.yaml` is used.
+Relative config names are resolved under `cfg/`; absolute paths also work. If
+unset, `cfg/cfg_0.yaml` is used.
 
 Built-in configs:
 
-- `config_0.yaml`: default single-vehicle config
-- `config_1.yaml`: namespaced `/px4_1/*` config
-- `config_oa.yaml`: MPC obstacle-avoidance config
+- `cfg_0.yaml`: default single-vehicle config
+- `cfg_1.yaml`: namespaced `/px4_1/*` config
+- `cfg_oa.yaml`: MPC obstacle-avoidance config
 
 ## Start Simulation
 
@@ -53,14 +54,14 @@ Recommended launcher:
 
 ```bash
 cd ${Path2Project}/DroneTracking
-./tools/simdrone_single.sh
+./bash/sim_scenes_txt.sh
 ```
 
 It starts a tmux session with:
 
-- `rviz2 -d tools/layout.rviz`
-- `python isaacsim/tf_tree.py`
-- `isaac_run isaacsim/sim_single.py`
+- `rviz2 -d layout.rviz`
+- `python isaacsim/sim_tf_tree.py`
+- `isaac_run isaacsim/sim_txt.py`
 - `MicroXRCEAgent udp4 -p 8888`
 - QGroundControl
 
@@ -68,34 +69,42 @@ Manual startup:
 
 ```bash
 cd ${Path2Project}/DroneTracking
-source ./tools/simdrone_env.sh
-isaac_run isaacsim/sim_single.py
+source ./bash/simdrone_env.sh
+isaac_run isaacsim/sim_txt.py
 MicroXRCEAgent udp4 -p 8888
 ./QGroundControl-x86_64.AppImage
 ```
 
-Waypoint and scene selection:
+Txt scene selection:
 
 ```bash
-isaac_run isaacsim/sim_single.py --list-tasks
-isaac_run isaacsim/sim_single.py --list-scenes
-isaac_run isaacsim/sim_single.py --task-index 0 --scene-index 0
+isaac_run isaacsim/sim_scenes_txt.py --list-scenes
+isaac_run isaacsim/sim_scenes_txt.py --list-waypoints
+isaac_run isaacsim/sim_scenes_txt.py --scene isaacsim/scenes/safmc --scene-index 0
+isaac_run isaacsim/sim_scenes_txt.py --scene isaacsim/scenes/safmc/two_gate.txt --waypoints plan2track/waypoints/line_waypoint.txt
+isaac_run isaacsim/sim_scenes_txt.py --scene-index 0 --waypoint-index 12
 ```
 
-`sim_single.py` loads waypoint files from `plan2track/waypoints/` and scene files
-from `scenes/*.txt`. Selecting the `behavior1k` scene source loads a USD scene
-from `scenes/behavior1k/` and samples a random spawn point from the occupancy
-map; task selection is skipped for `behavior1k`.
+`sim_scenes_txt.py` loads txt scene files from `isaacsim/scenes/*.txt` or
+subdirectories such as `isaacsim/scenes/scenes_txt/`. It loads path points from
+`plan2track/waypoints/`, draws them in Isaac Sim, and spawns the drone from the
+first waypoint converted from NED to ENU with a 0.07m height offset.
 
 Behavior1k examples:
 
 ```bash
-isaac_run isaacsim/sim_single.py --scene-source behavior1k --list-scenes
-isaac_run isaacsim/sim_single.py --scene-source behavior1k --scene-index 0
+isaac_run isaacsim/sim_behavior1k.py --list-scenes
+isaac_run isaacsim/sim_behavior1k.py --scene-index 0 --spawn-point 1 2 0.07
 ```
 
-`tools/simdrone_single.sh` sources `tools/export_mtl.sh` before starting Isaac
-Sim so behavior1k material paths are available.
+`bash/sim_scenes_txt.sh` starts `isaacsim/sim_scenes_txt.py` and forwards extra arguments to
+it. To launch Behavior1k through the same tmux layout:
+
+```bash
+./bash/sim_behavior1k.sh --scene-index 0 --spawn-point 1 2 0.07
+```
+
+Behavior1k material paths are configured by `sim_behavior1k.py`.
 
 ## Start Controller
 
@@ -103,16 +112,16 @@ Tracking only:
 
 ```bash
 cd ${Path2Project}/DroneTracking
-./tools/run_code.sh
-./tools/run_code.sh dronecnt cfg_visual.yaml
+./bash/run_code.sh
+./bash/run_code.sh dronecnt cfg_visual.yaml
 ```
 
 Obstacle-avoidance stack:
 
 ```bash
 cd ${Path2Project}/DroneTracking
-./tools/run_oa_code.sh
-./tools/run_oa_code.sh dronecnt config_0.yaml
+./bash/run_oa_code.sh
+./bash/run_oa_code.sh dronecnt cfg_0.yaml
 ```
 
 `run_code.sh` starts:
@@ -129,8 +138,8 @@ Manual startup:
 
 ```bash
 cd ${Path2Project}/DroneTracking
-source ./tools/simdrone_env.sh
-export DRONE_TRACKING_CONFIG=config_0.yaml
+source ./bash/simdrone_env.sh
+export DRONE_TRACKING_CONFIG=cfg_0.yaml
 
 python plan2track/plan2track.py
 python -m fsm.fsm_main
@@ -255,21 +264,19 @@ Relevant YAML sections:
 
 ## Key Files
 
-- `isaacsim/sim_single.py`: single-vehicle Isaac Sim app
+- `isaacsim/sim_txt.py`: txt-scene Isaac Sim app
+- `isaacsim/sim_behavior1k.py`: Behavior1k USD-scene Isaac Sim app
+- `isaacsim/sim_base.py`: shared Pegasus vehicle, camera, and run loop
 - `isaacsim/sim_utils.py`: scene, waypoint marker, and behavior1k helpers
-- `isaacsim/tf_tree.py`: ROS TF tree publisher
+- `isaacsim/sim_tf_tree.py`: ROS TF tree publisher
 - `plan2track/plan2track.py`: waypoint/path bridge for MPC/MPCC tracking
 - `plan2track/generate_waypoints.py`: minimum-snap waypoint generation helper
 - `perception/depth2scan.py`: depth image to pseudo LaserScan converter
 - `tracking/tracking_cnt.py`: controller step, CTBR conversion, and yaw-rate logic
 - `tracking/tracking_osqp.py`: OSQP MPC/HOCBF solver implementation
-<<<<<<< HEAD
-- `tracking/tracking_ros.py`: PX4 ROS message bridge
-=======
->>>>>>> 66427e1 (add obstacle avoidance)
 - `fsm/fsm_main.py`: FSM node startup
 - `fsm/fsm_node.py`: FSM ROS node and transition coordinator
 - `fsm/fsm_mpc.py`: MPC/MPCC behavior and tracker command publication
 - `fsm/fsm_interface.py`: interactive FSM terminal
-- `yamls/config.py`: YAML config loader
-- `yamls/*.yaml`: runtime configs
+- `cfg/config.py`: YAML config loader
+- `cfg/*.yaml`: runtime configs

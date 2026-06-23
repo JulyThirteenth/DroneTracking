@@ -2,7 +2,7 @@
 coordinate_system: "opengl"
 
 sensor_cfg:
-  # sim_single.py uses 90 deg horizontal FOV at 640x480.
+  # sim_base.py camera setup uses 90 deg horizontal FOV at 640x480.
   # The corresponding vertical FOV is about 73.74 deg.
   fov_deg: [90.0, 73.74]
   # Isaac Sim ROS2 depth is normally 32FC1 in meters.
@@ -21,4 +21,4 @@ projection_cfg:
 laserscan_cfg:
   aggregation: "min"
   n_intervals: 90
-  default_value: 4.5
+  default_value: 3.0
