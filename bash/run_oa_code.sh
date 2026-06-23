@@ -40,7 +40,7 @@ DEPTH_FRAME_ID="${DEPTH_FRAME_ID:-drone_fpv_camera}"
 DEPTH_SCAN_CONFIG="${DEPTH_SCAN_CONFIG:-${PROJECT_DIR}/perception/yaml/depth_transform.yaml}"
 
 tmux send-keys -t "${P_PLAN}" \
-"cd \"${PROJECT_DIR}\" && source ./bash/simdrone_env.sh && ${ENV_PREFIX}python plan2track/keyboard2track.py" C-m
+"cd \"${PROJECT_DIR}\" && source ./bash/simdrone_env.sh && ${ENV_PREFIX}python plan2track/vel2track.py" C-m
 
 tmux send-keys -t "${P_FSM_NODE}" \
 "cd \"${PROJECT_DIR}\" && source ./bash/simdrone_env.sh && ${ENV_PREFIX}python -m fsm.fsm_main" C-m

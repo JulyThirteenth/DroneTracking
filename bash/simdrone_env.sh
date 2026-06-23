@@ -25,7 +25,7 @@ conda activate mpcc
 
 # 3) source ROS2 和工作空间
 source /opt/ros/humble/setup.bash
-source ~/devspace/FlightSim/px4-ros_ws/install/setup.bash
+source ~/DroneSimulator/px4-ros_ws/install/setup.bash
 
 # 4) 打印确认信息
 echo "[OK] CONDA_DEFAULT_ENV=$CONDA_DEFAULT_ENV"

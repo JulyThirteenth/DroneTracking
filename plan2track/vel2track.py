@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Keyboard velocity command to tracker reference path.
+"""Velocity command to tracker reference path.
 
 Controls:
-  Up/Down    : increase/decrease forward speed
-  Left/Right : decrease/increase yaw rate
-  Space      : stop forward speed and yaw rate
+  Space      : switch between twist and keyboard modes; velocity is reset to zero
+  Up/Down    : increase/decrease keyboard forward speed
+  Left/Right : decrease/increase keyboard yaw rate
   q          : quit
 """
 
@@ -19,7 +19,7 @@ from pathlib import Path
 
 import numpy as np
 import rclpy
-from geometry_msgs.msg import PoseStamped, TwistStamped
+from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Path as NavPath
 from px4_msgs.msg import VehicleLocalPosition
 from rclpy.executors import ExternalShutdownException
@@ -50,6 +50,8 @@ KEY_UP = "\x1b[A"
 KEY_DOWN = "\x1b[B"
 KEY_RIGHT = "\x1b[C"
 KEY_LEFT = "\x1b[D"
+MODE_TWIST = "twist"
+MODE_KEYBOARD = "keyboard"
 
 
 def _yaw_enu_from_local_position(msg: VehicleLocalPosition) -> float:
@@ -91,9 +93,9 @@ class KeyboardTerminal:
             self._term = None
 
 
-class Keyboard2TrackNode(Node):
+class Vel2TrackNode(Node):
     def __init__(self):
-        super().__init__("keyboard2track")
+        super().__init__("vel2track")
         self._cfg = get_cfg()
         self._load_params()
 
@@ -102,6 +104,9 @@ class Keyboard2TrackNode(Node):
         self._yaw_cmd_enu: float | None = None
         self._speed = 0.0
         self._yaw_rate = 0.0
+        self._mode = MODE_KEYBOARD
+        self._twist_velocity_enu = np.zeros(3, dtype=float)
+        self._twist_yaw_rate = 0.0
         self._fsm_state = ""
         self._hover_position_enu: np.ndarray | None = None
         self._target_enu: np.ndarray | None = None
@@ -138,6 +143,7 @@ class Keyboard2TrackNode(Node):
             "yaw_rate_limit",
             1.0 if yaw.yaw_rate_limit is None else yaw.yaw_rate_limit,
         )
+        self._twist_topic = self._param_str("twist_topic", "/cmd_vel")
 
     def _create_ros_io(self) -> None:
         cfg = self._cfg
@@ -158,16 +164,17 @@ class Keyboard2TrackNode(Node):
             self._on_fsm_state,
             latched_qos(1),
         )
+        self.create_subscription(
+            Twist,
+            self._twist_topic,
+            self._on_twist,
+            10,
+        )
         self._pub_ref = self.create_publisher(
             NavPath, str(cfg.topics.tracking.ref_traj_path), 10
         )
         self._pub_yaw = self.create_publisher(
             Float32, str(cfg.topics.planning.yaw_cmd_enu), 10
-        )
-        self._pub_vel = self.create_publisher(
-            TwistStamped,
-            self._param_str("velocity_topic", "/keyboard/velocity_cmd"),
-            10,
         )
         self._pub_pos = self.create_publisher(
             PoseStamped,
@@ -182,10 +189,11 @@ class Keyboard2TrackNode(Node):
         if not self._terminal.active:
             self.get_logger().warn("stdin is not a tty; keyboard input is disabled")
         self.get_logger().info(
-            "keyboard2track: Up/Down speed, Left/Right yaw_rate, Space stop, q quit"
+            "vel2track: Space switches twist/keyboard modes and resets velocity; "
+            "keyboard mode uses Up/Down speed, Left/Right yaw_rate; q quits"
         )
         self.get_logger().info(
-            "publishing "
+            f"subscribing twist={self._twist_topic}; publishing "
             f"{self._cfg.topics.tracking.ref_traj_path}, "
             f"{self._cfg.topics.planning.yaw_cmd_enu}"
         )
@@ -196,47 +204,62 @@ class Keyboard2TrackNode(Node):
     def _on_vehicle_state(self, msg: VehicleLocalPosition) -> None:
         self._position_enu = ned_to_enu([msg.x, msg.y, msg.z])
         self._heading_enu = _yaw_enu_from_local_position(msg)
-        # if np.isfinite(self._heading_enu):
-        #     self._heading_enu = yaw_ned_to_enu(self._heading_enu)
         self._publish_vehicle_pose()
 
     def _on_fsm_state(self, msg: String) -> None:
         self._fsm_state = str(msg.data).strip()
 
+    def _on_twist(self, msg: Twist) -> None:
+        velocity = np.array(
+            [float(msg.linear.x), float(msg.linear.y), float(msg.linear.z)],
+            dtype=float,
+        )
+        speed = float(np.linalg.norm(velocity[:2]))
+        if speed > self._linear_max > 0.0:
+            velocity[:2] *= self._linear_max / speed
+
+        self._twist_velocity_enu = velocity
+        self._twist_yaw_rate = float(
+            np.clip(msg.angular.z, -self._yaw_rate_limit, self._yaw_rate_limit)
+        )
+
     def _tick(self) -> None:
         self._handle_keys(self._terminal.read())
 
         if not (self._fsm_state == STATE_TRACKING and self._position_enu is not None):
+            self._print_status()
             return
 
-        self._update_yaw_cmd()
-        direction = np.array(
-            [np.cos(self._yaw_cmd_enu), np.sin(self._yaw_cmd_enu), 0.0],
-            dtype=float,
-        )
-        start_enu = self._reference_start_enu()
-        points = self._straight_ref_points(start_enu, direction)
-        velocity_enu = direction * self._speed
+        velocity_enu, yaw_rate = self._active_velocity()
+        self._update_yaw_cmd(yaw_rate=yaw_rate)
+        points = self._straight_ref_points(self._reference_start_enu(), velocity_enu)
         self._target_enu = points[-1].copy()
-        self._publish_refs(points, velocity_enu)
+        self._publish_refs(points)
         self._print_status()
 
-    def _update_yaw_cmd(self) -> None:
-        curr_cmd_enu = 0.0
-        if self._yaw_cmd_enu is None:
-            curr_cmd_enu = self._heading_enu
-        else:
-            curr_cmd_enu = self._yaw_cmd_enu
-        self._yaw_cmd_enu = wrap_pi(curr_cmd_enu + self._yaw_rate * self._publish_dt)
+    def _active_velocity(self) -> tuple[np.ndarray, float]:
+        if self._mode == MODE_TWIST:
+            return self._twist_velocity_enu.copy(), float(self._twist_yaw_rate)
 
-    def _direction_enu(self) -> np.ndarray:
-        return np.array(
-            [np.cos(self._yaw_cmd_enu), np.sin(self._yaw_cmd_enu), 0.0],
+        yaw = self._yaw_cmd_enu
+        if yaw is None:
+            yaw = self._heading_enu if self._heading_enu is not None else 0.0
+        direction = np.array(
+            [np.cos(yaw), np.sin(yaw), 0.0],
             dtype=float,
         )
+        return direction * self._speed, float(self._yaw_rate)
+
+    def _update_yaw_cmd(self, *, yaw_rate: float) -> None:
+        curr_cmd_enu = self._yaw_cmd_enu
+        if curr_cmd_enu is None:
+            curr_cmd_enu = self._heading_enu if self._heading_enu is not None else 0.0
+        self._yaw_cmd_enu = wrap_pi(float(curr_cmd_enu) + yaw_rate * self._publish_dt)
+
 
     def _reference_start_enu(self) -> np.ndarray:
-        if self._speed > 0.0:
+        velocity_enu, _yaw_rate = self._active_velocity()
+        if float(np.linalg.norm(velocity_enu)) > 1e-4:
             self._hover_position_enu = None
             return self._position_enu
 
@@ -246,10 +269,9 @@ class Keyboard2TrackNode(Node):
             )
         return self._hover_position_enu
 
-    def _publish_refs(self, points_enu: np.ndarray, velocity_enu: np.ndarray) -> None:
+    def _publish_refs(self, points_enu: np.ndarray) -> None:
         self._pub_ref.publish(self._to_path(points_enu))
         self._pub_yaw.publish(Float32(data=float(self._yaw_cmd_enu)))
-        self._pub_vel.publish(self._to_twist(velocity_enu))
 
     def _straight_ref_points(
         self,
@@ -267,6 +289,16 @@ class Keyboard2TrackNode(Node):
         if not keys:
             return
 
+        if " " in keys:
+            self._toggle_mode()
+        if "q" in keys:
+            rclpy.shutdown()
+            return
+
+        if self._mode != MODE_KEYBOARD:
+            self._print_status()
+            return
+
         if KEY_UP in keys:
             self._set_speed(self._speed + self._linear_step)
         if KEY_DOWN in keys:
@@ -275,13 +307,20 @@ class Keyboard2TrackNode(Node):
             self._set_yaw_rate(self._yaw_rate + self._yaw_rate_step)
         if KEY_LEFT in keys:
             self._set_yaw_rate(self._yaw_rate - self._yaw_rate_step)
-        if " " in keys:
-            self._set_speed(0.0)
-            self._set_yaw_rate(0.0)
-        if "q" in keys:
-            rclpy.shutdown()
-            return
         self._print_status()
+
+    def _toggle_mode(self) -> None:
+        self._mode = MODE_TWIST if self._mode == MODE_KEYBOARD else MODE_KEYBOARD
+        self._reset_velocity()
+        self._hover_position_enu = None
+        print(f"\nvel2track mode switched to {self._mode}; velocity reset to zero")
+        self._print_status()
+
+    def _reset_velocity(self) -> None:
+        self._set_speed(0.0)
+        self._set_yaw_rate(0.0)
+        self._twist_velocity_enu[:] = 0.0
+        self._twist_yaw_rate = 0.0
 
     def _set_speed(self, speed: float) -> None:
         self._speed = float(np.clip(speed, self._linear_min, self._linear_max))
@@ -292,13 +331,15 @@ class Keyboard2TrackNode(Node):
         )
 
     def _print_status(self) -> None:
-        if self._target_enu is None:
-            return "unknown"
-        x, y, z = np.asarray(self._target_enu, dtype=float).reshape(3)
-        target = f"({x:.2f}, {y:.2f}, {z:.2f})"
+        velocity_enu, yaw_rate = self._active_velocity()
+        speed = float(np.linalg.norm(velocity_enu))
+        target = "unknown"
+        if self._target_enu is not None:
+            x, y, z = np.asarray(self._target_enu, dtype=float).reshape(3)
+            target = f"({x:.2f}, {y:.2f}, {z:.2f})"
         print(
-            f"\rkeyboard2track speed={self._speed:.2f} m/s, "
-            f"yaw_rate={self._yaw_rate:.2f} rad/s, "
+            f"\rvel2track mode={self._mode}, speed={speed:.2f} m/s, "
+            f"yaw_rate={yaw_rate:.2f} rad/s, "
             f"state={self._fsm_state or 'unknown'}, target={target}",
             end="",
             flush=True,
@@ -318,16 +359,6 @@ class Keyboard2TrackNode(Node):
             msg.poses.append(ps)
         return msg
 
-    def _to_twist(self, velocity_enu: np.ndarray) -> TwistStamped:
-        msg = TwistStamped()
-        msg.header.frame_id = self._frame_id
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.twist.linear.x = float(velocity_enu[0])
-        msg.twist.linear.y = float(velocity_enu[1])
-        msg.twist.linear.z = float(velocity_enu[2])
-        msg.twist.angular.z = float(self._yaw_rate)
-        return msg
-
     def _publish_vehicle_pose(self) -> None:
         qx, qy, qz, qw = quat_from_yaw_enu(self._heading_enu)
         msg = PoseStamped()
@@ -345,7 +376,7 @@ class Keyboard2TrackNode(Node):
 
 def main() -> None:
     rclpy.init()
-    node = Keyboard2TrackNode()
+    node = Vel2TrackNode()
     try:
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):

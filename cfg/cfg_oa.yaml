@@ -98,4 +98,4 @@ tracking:
     max_obstacles: 90
     safe_distance: 0.5
     lambda_gain: 0.8
-    slack_weight: 1000000.0
+    slack_weight: 2000000.0

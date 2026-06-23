@@ -36,7 +36,7 @@ tmux send-keys -t "$P_TF_TREE" \
 "cd \"$PROJECT_DIR\" && source \"$ENV_SH\" && python isaacsim/sim_tf_tree.py" C-m
 
 tmux send-keys -t "$P_ISAAC" \
-"cd \"$PROJECT_DIR\" && isaac_run isaacsim/sim_txt.py$SIM_ARGS" C-m
+"cd \"$PROJECT_DIR\" && isaac_run isaacsim/sim_scenes_txt.py$SIM_ARGS" C-m
 
 tmux send-keys -t "$P_AGENT" \
 "MicroXRCEAgent udp4 -p 8888" C-m
