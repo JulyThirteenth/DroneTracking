@@ -130,8 +130,11 @@ cd ${Path2Project}/DroneTracking
 - `python -m fsm.fsm_main`
 - `python -m fsm.fsm_interface`
 
-`run_oa_code.sh` starts the same controller panes and additionally starts:
+`run_oa_code.sh` starts:
 
+- `python plan2track/vel2track.py`
+- `python -m fsm.fsm_main`
+- `python -m fsm.fsm_interface`
 - `python perception/depth2scan.py`
 
 Manual startup:
