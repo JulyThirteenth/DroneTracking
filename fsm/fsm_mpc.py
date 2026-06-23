@@ -178,16 +178,25 @@ class MPCBehavior(MPCBehaviorBase):
                         delta = (hover_target - current_position).reshape(3, 1)
                         ref_cmd_enu = current_position.reshape(3, 1) + delta * progress
 
-        p_cmd, q_cmd, r_cmd, thrust, _ = self._tracker.step(
-            self._vehicle_state.position_enu,
-            self._vehicle_state.velocity_enu,
-            self._vehicle_state.accel_enu,
-            self._vehicle_state.yaw_enu,
-            yaw_cmd_enu=self._yaw_cmd_enu,
-            ref_traj_enu=ref_cmd_enu,
-            obstacle_points_enu=obstacle_points,
-            log_solver=False,
-        )
+        try:
+            p_cmd, q_cmd, r_cmd, thrust, _ = self._tracker.step(
+                self._vehicle_state.position_enu,
+                self._vehicle_state.velocity_enu,
+                self._vehicle_state.accel_enu,
+                self._vehicle_state.yaw_enu,
+                yaw_cmd_enu=self._yaw_cmd_enu,
+                ref_traj_enu=ref_cmd_enu,
+                obstacle_points_enu=obstacle_points,
+                log_solver=False,
+            )
+        except Exception as e:
+            self._node._logger.error(f"Solve ctbr encounter: {e}. Hover!")
+            p_cmd, q_cmd, r_cmd, thrust = (
+                0.0,
+                0.0,
+                0.0,
+                self._tracker.cfg.ctbr.hover_thrust,
+            )
 
         self._px4_bridge.publish_rates_setpoint(p_cmd, q_cmd, r_cmd, thrust)
 
