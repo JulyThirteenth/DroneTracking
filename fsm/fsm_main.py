@@ -180,7 +180,7 @@ def fsm_creater(*, node_cls: type, cfg: Any) -> None:
 
 
 def main() -> None:
-    from yamls.config import get_cfg
+    from cfg.config import get_cfg
 
     from .fsm_node import DroneFSMNode
 

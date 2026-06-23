@@ -11,9 +11,6 @@ PX4 local position is NED; this node publishes ENU/map transforms.
 from __future__ import annotations
 
 import math
-import sys
-from pathlib import Path
-
 import numpy as np
 import rclpy
 from geometry_msgs.msg import TransformStamped
@@ -22,17 +19,32 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
-_ROOT = Path(__file__).resolve().parent.parent
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
 
-from tracking.tracking_utils import (
-    ned_to_enu,
-    quat_from_yaw_enu,
-    wrap_pi,
-    yaw_ned_to_enu,
-)
-from yamls.config import get_cfg
+DEFAULT_LOCAL_POSITION_TOPIC = "/fmu/out/vehicle_local_position"
+DEFAULT_WORLD_FRAME = "map"
+
+
+def as_vec3(value) -> np.ndarray:
+    return np.asarray(value, dtype=float).reshape(3)
+
+
+def ned_to_enu(value) -> np.ndarray:
+    value = as_vec3(value)
+    return np.array([value[1], value[0], -value[2]], dtype=float)
+
+
+def wrap_pi(angle_rad: float) -> float:
+    angle = float(angle_rad)
+    return math.atan2(math.sin(angle), math.cos(angle))
+
+
+def yaw_ned_to_enu(yaw_ned: float) -> float:
+    return wrap_pi(math.pi / 2.0 - float(yaw_ned))
+
+
+def quat_from_yaw_enu(yaw_enu: float) -> tuple[float, float, float, float]:
+    half = 0.5 * wrap_pi(yaw_enu)
+    return (0.0, 0.0, float(math.sin(half)), float(math.cos(half)))
 
 
 class DroneTfTreeNode(Node):
@@ -41,12 +53,11 @@ class DroneTfTreeNode(Node):
     def __init__(self) -> None:
         super().__init__("drone_tf_tree")
 
-        cfg = get_cfg()
         self.declare_parameter(
             "vehicle_local_position_topic",
-            cfg.topics.px4.vehicle_local_position,
+            DEFAULT_LOCAL_POSITION_TOPIC,
         )
-        self.declare_parameter("world_frame", cfg.plan2track.path.frame_id)
+        self.declare_parameter("world_frame", DEFAULT_WORLD_FRAME)
         self.declare_parameter("body_frame", "base_link")
         self.declare_parameter("camera_frame", "drone_fpv_camera")
         self.declare_parameter("camera_xyz", [0.1, 0.0, 0.02])

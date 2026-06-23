@@ -55,7 +55,7 @@ tracking:
   mpc:
     dt: 0.1
     horizon: 15
-    v_ref: 3.0
+    v_ref: 1.0
     cost:
       Q_diag: [120.0, 120.0, 300.0]
       R_diag: [0.2, 0.2, 0.2]

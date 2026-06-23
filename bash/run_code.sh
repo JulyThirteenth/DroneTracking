@@ -35,13 +35,13 @@ if [[ -n "${CONFIG_FILE}" ]]; then
 fi
 
 tmux send-keys -t "${SESSION}":0.0 \
-"cd \"${PROJECT_DIR}\" && source ./tools/simdrone_env.sh && ${ENV_PREFIX}python plan2track/plan2track.py" C-m
+"cd \"${PROJECT_DIR}\" && source ./bash/simdrone_env.sh && ${ENV_PREFIX}python plan2track/plan2track.py" C-m
 
 tmux send-keys -t "${SESSION}":0.1 \
-"cd \"${PROJECT_DIR}\" && source ./tools/simdrone_env.sh && ${ENV_PREFIX}python -m fsm.fsm_main" C-m
+"cd \"${PROJECT_DIR}\" && source ./bash/simdrone_env.sh && ${ENV_PREFIX}python -m fsm.fsm_main" C-m
 
 tmux send-keys -t "${SESSION}":0.2 \
-"cd \"${PROJECT_DIR}\" && source ./tools/simdrone_env.sh && ${ENV_PREFIX}python -m fsm.fsm_interface" C-m
+"cd \"${PROJECT_DIR}\" && source ./bash/simdrone_env.sh && ${ENV_PREFIX}python -m fsm.fsm_interface" C-m
 
 tmux select-pane -t "${SESSION}":0.2
 tmux attach -t "${SESSION}"

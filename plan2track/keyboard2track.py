@@ -39,7 +39,7 @@ from tracking.tracking_utils import (
     quat_from_yaw_enu,
 )
 from fsm.fsm_ros import latched_qos
-from yamls.config import get_cfg
+from cfg.config import get_cfg
 
 _PROJECT_CFG = get_cfg()
 TOPIC_VEHICLE_LOCAL_POSITION = _PROJECT_CFG.topics.px4.vehicle_local_position

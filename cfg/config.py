@@ -9,7 +9,7 @@ from typing import Any
 
 import yaml
 
-DEFAULT_CONFIG_FILE = "config_0.yaml"
+DEFAULT_CONFIG_FILE = "cfg_0.yaml"
 
 
 def _deep_update(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -36,6 +36,10 @@ def load_config() -> tuple[dict[str, Any], Path]:
     path = (
         Path(raw) if Path(raw).is_absolute() else Path(__file__).resolve().parent / raw
     )
+    if not path.exists() and path.name.startswith("config_"):
+        renamed = path.with_name("cfg_" + path.name.removeprefix("config_"))
+        if renamed.exists():
+            path = renamed
     with path.open("r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
     return data, path

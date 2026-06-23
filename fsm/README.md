@@ -132,4 +132,4 @@ python -m fsm.fsm_main
 python -m fsm.fsm_interface
 ```
 
-通常由 `tools/run_code.sh` 或 `tools/run_oa_code.sh` 启动。
+通常由 `bash/run_code.sh` 或 `bash/run_oa_code.sh` 启动。

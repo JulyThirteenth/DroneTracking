@@ -15,7 +15,7 @@ from std_msgs.msg import String
 
 from .fsm_ros import derive_info_topic, latched_qos
 from .fsm_spec import CMD_TO_EVENT, EVENT_ALIASES, TRANSITION_SPECS
-from yamls.config import get_cfg
+from cfg.config import get_cfg
 
 _CFG = get_cfg()
 _BUILTINS = {

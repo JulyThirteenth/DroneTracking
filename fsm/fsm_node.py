@@ -28,7 +28,7 @@ from .fsm_spec import (
 )
 from .fsm_wrap import FSMNodeBase
 from tracking.tracking_cfg import DEFAULT_CONFIG
-from yamls.config import get_cfg
+from cfg.config import get_cfg
 
 _CFG = get_cfg()
 _MPC = "mpc"
