@@ -1,0 +1,42 @@
+drone_cnt_mpc:
+  ros__parameters:
+    horizon: 15
+    mpc_dt: 0.1
+    control_dt: 0.01
+
+    hover_thrust: 0.58
+    gravity: 9.81
+    thrust_min: 0.10
+    thrust_max: 0.90
+    yaw_kp: 0.04
+    yaw_rate_limit: 1.57
+    body_rate_limit: 3.0
+    acceleration_alpha: 0.05
+
+    jerk_min: [-25.0, -25.0, -25.0]
+    jerk_max: [25.0, 25.0, 25.0]
+    jerk_delta_min: [-50.0, -50.0, -50.0]
+    jerk_delta_max: [50.0, 50.0, 50.0]
+    velocity_min: [-8.0, -8.0, -8.0]
+    velocity_max: [8.0, 8.0, 8.0]
+    acceleration_min: [-10.0, -10.0, -10.0]
+    acceleration_max: [10.0, 10.0, 10.0]
+
+    position_weight: [2000.0, 2000.0, 2000.0]
+    jerk_weight: [0.1, 0.1, 0.1]
+    jerk_delta_weight: [0.2, 0.2, 0.2]
+    terminal_weight: 1.0
+    velocity_slack_weight: 1.0e4
+    acceleration_slack_weight: 1.0e4
+
+    local_position_topic: /fmu/out/vehicle_local_position
+    odometry_topic: /fmu/out/vehicle_odometry
+    fsm_state_topic: /fsm/state
+    yaw_command_topic: /planning/yaw_cmd_enu
+    reference_topic: /tracking/ref_traj_path
+    rates_setpoint_topic: /drone_cnt/vehicle_rates_setpoint
+    active_state: tracking
+    require_odometry: false
+    state_timeout: 1.0
+    publish_output: true
+    log_solver: false

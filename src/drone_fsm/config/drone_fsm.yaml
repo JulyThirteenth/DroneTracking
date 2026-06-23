@@ -1,0 +1,31 @@
+drone_fsm:
+  ros__parameters:
+    initial_state: preflight
+    cmd_topic: /fsm/cmd
+    state_topic: /fsm/state
+    transition_topic: /fsm/transition
+    info_topic: /fsm/info
+
+drone_fly:
+  ros__parameters:
+    control_rate: 100.0
+    takeoff_height: 1.2
+    offboard_prestream_time: 1.0
+    command_retry_period: 1.0
+    controller_timeout: 0.30
+    vehicle_status_timeout: 1.50
+    local_position_timeout: 0.50
+    send_arm_command: true
+    send_offboard_command: true
+    target_system: 1
+    state_topic: /fsm/state
+    local_position_topic: /fmu/out/vehicle_local_position
+    vehicle_status_topic: /fmu/out/vehicle_status_v1
+    command_ack_topic: /fmu/out/vehicle_command_ack
+    controller_topic: /drone_cnt/vehicle_rates_setpoint
+
+drone_cli:
+  ros__parameters:
+    cmd_topic: /fsm/cmd
+    state_topic: /fsm/state
+    info_topic: /fsm/info

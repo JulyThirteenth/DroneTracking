@@ -1,5 +1,7 @@
-scenes/behavior1k/
-fsm/log/
+build_pixi/
+install_pixi/
+log_pixi/
+.vscode/
 
 *.jsonl
 
@@ -206,7 +208,13 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
+# Generated CTBR benchmark artifacts
+/src/drone_ccm/ctbr_cnt/fig/
+
 # Marimo
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+# pixi environments
+.pixi/*
+!.pixi/config.toml

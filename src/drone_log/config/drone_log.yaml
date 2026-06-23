@@ -1,0 +1,10 @@
+drone_log:
+  ros__parameters:
+    controller_mode: mpc
+    log_directory: logs
+    run_name: ""
+    flush_interval: 20
+    local_position_topic: /fmu/out/vehicle_local_position
+    fsm_state_topic: /fsm/state
+    yaw_command_topic: /planning/yaw_cmd_enu
+    rates_setpoint_topic: /drone_cnt/vehicle_rates_setpoint

@@ -1,0 +1,27 @@
+drone_ccm_reference:
+  ros__parameters:
+    checkpoint: ""
+    mode: hover
+    waypoint_file: ""
+    waypoint_speed: 1.0
+    publish_period: 0.01
+    transition_duration: 3.0
+    state_timeout: 0.25
+    active_state: tracking
+    output_topic: /tracking/ccm_reference
+    fsm_state_topic: /fsm/state
+    odometry_topic: /fmu/out/vehicle_odometry
+
+drone_ccm_controller:
+  ros__parameters:
+    checkpoint: ""
+    device: cpu
+    dtype: float32
+    hover_thrust: 0.5812
+    control_period: 0.01
+    input_timeout: 0.25
+    active_state: tracking
+    odometry_topic: /fmu/out/vehicle_odometry
+    reference_topic: /tracking/ccm_reference
+    fsm_state_topic: /fsm/state
+    rates_setpoint_topic: /drone_cnt/vehicle_rates_setpoint

@@ -1,1 +1,0 @@
-"""Tracking package for DroneTracking."""

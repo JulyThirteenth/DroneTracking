@@ -1,0 +1,2 @@
+# cuboid name cx cy cz sx sy sz yaw_deg pivot_x pivot_y pivot_z r g b opacity
+

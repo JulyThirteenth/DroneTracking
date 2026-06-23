@@ -1,0 +1,24 @@
+name: ctbr_baseline
+checkpoint: neu_ccm_linear.pt
+ego_checkpoint: neu_ego_ccm_active.pt
+vehicle_config: cfg/iris.yaml
+
+frequency_hz: 400.0
+outer_frequency_hz: 100.0
+controllers: [so3-ctbr, so3-full, ccm, ego-ccm]
+speed_scales: [1.0, 1.5, 2.0]
+robustness_seeds: [3, 17, 41]
+
+yaw_mode: velocity
+fixed_yaw_rad: 0.0
+yaw_rate_limit_radps: 0.42
+
+# PX4 mapping: normalized_thrust = hover_thrust * collective / gravity.
+hover_thrust: 0.58
+normalized_thrust_lower: 0.10
+normalized_thrust_upper: 0.90
+
+reference_lower: [6.81, -1.0, -1.0, -0.5]
+reference_upper: [12.81, 1.0, 1.0, 0.5]
+control_lower: [1.6913793103448278, -3.839724354387525, -3.839724354387525, -1.57]
+control_upper: [15.22241379310345, 3.839724354387525, 3.839724354387525, 1.57]

@@ -1,0 +1,33 @@
+drone_ref_mpc:
+  ros__parameters:
+    frame_id: map
+    path_file: waypoints/line_waypoint.txt
+    origin_mode: first_xy
+    loop: true
+    fixed_yaw: false
+    initial_yaw: 0.0
+    yaw_lookahead: 0.2
+    vehicle_position_topic: /fmu/out/vehicle_local_position
+    planning_path_topic: /planning/path
+    vehicle_pose_topic: /tracking/vehicle_pose
+    yaw_topic: /planning/yaw_cmd_enu
+    horizon: 15
+    mpc_dt: 0.1
+    reference_speed: 3.0
+    output_topic: /tracking/ref_traj_path
+
+drone_ref_mpcc:
+  ros__parameters:
+    frame_id: map
+    path_file: waypoints/line_waypoint.txt
+    origin_mode: first_xy
+    loop: false
+    publish_period: 0.02
+    fixed_yaw: false
+    initial_yaw: 0.0
+    yaw_lookahead: 0.2
+    vehicle_position_topic: /fmu/out/vehicle_local_position
+    planning_path_topic: /planning/path
+    vehicle_pose_topic: /tracking/vehicle_pose
+    yaw_topic: /planning/yaw_cmd_enu
+    output_topic: /tracking/path

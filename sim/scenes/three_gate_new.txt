@@ -1,0 +1,4 @@
+# gate name cx cy cz yaw_deg pivot_x pivot_y pivot_z height outer inner thick r g b opacity
+gate gate_00 0.0 -3.0 1.424 60.0 nan nan nan 2.374 1.9 1.5 0.2 0.05 0.15 0.45 0.80
+gate gate_01 0.0 0.0 1.424 0.0 nan nan nan 2.374 1.9 1.5 0.2 0.05 0.15 0.45 0.80
+gate gate_02 0.0 3.0 1.424 -60.0 nan nan nan 2.374 1.9 1.5 0.2 0.05 0.15 0.45 0.80
