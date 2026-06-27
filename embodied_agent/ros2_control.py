@@ -20,7 +20,7 @@ import atexit
 from tracking.tracking_utils import ned_to_enu, yaw_ned_to_enu, wrap_pi, is_finite_vec3
 from fsm.fsm_ros import TOPIC_VEHICLE_LOCAL_POSITION, latched_qos
 from fsm.fsm_ros import latched_qos
-from yamls.config import get_cfg
+from cfg.config import get_cfg
 _CFG = get_cfg()
 
 NAV_PUBLISH_DT = 0.02

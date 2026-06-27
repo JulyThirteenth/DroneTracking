@@ -77,17 +77,12 @@ def get_current_position_and_rotation():
     pos = state["position"]
     rot = state["rotation"]
 
-    yaw_rad = math.radians(rot["yaw"] % 360)
-    fx = math.cos(yaw_rad)
-    fy = math.sin(yaw_rad)
     dirs = ["E", "NE", "N", "NW", "W", "SW", "S", "SE"]
     d = dirs[round(rot["yaw"] % 360 / 45) % 8]
 
     return (
         f"Position: x={pos['x']:.3f}(E) y={pos['y']:.3f}(N) z={pos['z']:.3f}(Up). "
         f"Yaw: {rot['yaw']:.1f}° ≈ {d}. "
-        f"Forward vector: ({fx:.2f}, {fy:.2f}) — "
-        f"right is ({fy:.2f}, {-fx:.2f}). "
         f"(↑yaw=left/CCW, ↓yaw=right/CW)"
     )
 
@@ -182,17 +177,7 @@ class NavigateInput(BaseModel):
     z: float = Field(description="Target Up coordinate (ENU z, altitude).")
 
 
-@tool(args_schema=NavigateInput)
-def navigate_to_point(x: float, y: float, z: float) -> str:
-    """
-    Move the agent to a specific world coordinate (ENU: x=East, y=North, z=Up).
-
-    CRITICAL RULES:
-    - NEVER call navigate_to_point with arbitrary coordinates — ONLY use exact values from get_target_object, OR small adjustments (<0.5m from current position) to fine-tune after a failed navigation.
-    - NEVER invent or guess coordinates for exploration.
-    - NEVER use navigate for "getting a better view" — use rotate instead.
-    - z should always match current altitude (use get_current_position_and_rotation).
-    """
+def _do_navigate(x: float, y: float, z: float) -> str:
     if _control is None:
         raise Exception("Error: Environment controller is not initialized. Call init_env() first.")
 
@@ -232,10 +217,55 @@ def navigate_to_point(x: float, y: float, z: float) -> str:
             f"(x={end_x:.2f}, y={end_y:.2f}, z={end_z:.2f}, yaw={end_yaw:.2f}°)."
         )
 
+@tool(args_schema=NavigateInput)
+def navigate_to_point(x: float, y: float, z: float) -> str:
+    """
+    Move the agent to a specific world coordinate (ENU: x=East, y=North, z=Up).
+
+    CRITICAL RULES:
+    - NEVER call navigate_to_point with arbitrary coordinates — ONLY use exact values from get_target_object, OR small adjustments (<0.5m from current position) to fine-tune after a failed navigation.
+    - NEVER invent or guess coordinates for exploration.
+    - NEVER use navigate for "getting a better view" — use rotate instead.
+    - z should always match current altitude (use get_current_position_and_rotation).
+    """
+    return _do_navigate(x, y, z)
+
+class MoveRelativeInput(BaseModel):
+    forward: float = Field(default=0.0, description="forward distance (m), positive=forward, negative=backward")
+    right: float = Field(default=0.0, description="right distance (m), positive=right, negative=left")
+    up: float = Field(default=0.0, description="up distance (m), positive=up, negative=down")
+
+@tool(args_schema=MoveRelativeInput)
+def move_relative(forward=0.0, right=0.0, up=0.0) -> str:
+    """
+    Move the agent relative to its current body frame (forward/right/up).
+
+    USE THIS FOR:
+    - Fine-tuning position after reaching a target vicinity
+    - Sidestepping obstacles without rotating (e.g. move_relative(right=0.3))
+    - Small forward/backward adjustments (forward=0.1~0.3)
+
+    DO NOT USE for long-distance navigation — use navigate_to_point instead.
+
+    Parameters:
+    - forward: distance along the agent's forward axis (m), positive=forward
+    - right:   distance along the agent's right axis (m), positive=right
+    - up:      distance along the agent's up axis (m), positive=up
+    """
+    if _control is None:
+        raise Exception("Error: Environment controller is not initialized.")
+
+    state = _control.get_agent_state()
+    pos = state["position"]
+    yaw_rad = math.radians(state["rotation"]["yaw"])
+
+    dx = forward * math.cos(yaw_rad) + right * math.sin(yaw_rad)
+    dy = forward * math.sin(yaw_rad) - right * math.cos(yaw_rad)
+
+    return _do_navigate(pos["x"]+dx, pos["y"]+dy, pos["z"]+up)
 
 class RotateInput(BaseModel):
     yaw: float = Field(description="The target yaw angle (in degrees) for the agent.")
-
 
 @tool(args_schema=RotateInput)
 def rotate(yaw: float) -> str:
@@ -305,6 +335,7 @@ TOOLS_LIST = [
     get_target_object,
     load_image,
     navigate_to_point,
+    move_relative,
     rotate,
     get_current_position_and_rotation,
 ]

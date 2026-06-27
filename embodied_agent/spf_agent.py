@@ -40,13 +40,22 @@ When navigate_to_point fails with "blocked_by_obstacle" or "timeout":
 2. If target is close and already centered in view, confirm arrival.
    Otherwise, analyze the target's position in the view and plan how to approach it.
 3. Determine your orientation:
-   - Call get_current_position_and_rotation to get current yaw, forward vector,
-     and right vector. Use these to plan which direction to detour.
+   - Call get_current_position_and_rotation to get current yaw and position.
+     Decide whether to rotate or use move_relative to detour.
 4. Analyze the scene via get_current_view and navigate around the obstacle:
-   - Rotate 30° left or right (toward a clear direction), then move 0.3-0.5m
-     forward via navigate_to_point with a small offset from current position.
+   - rotate 30° left or right (toward a clear direction), then use
+     move_relative(forward=0.1~0.3) to sidestep the obstacle.
+   - Use move_relative(right=±0.3) for lateral adjustments without rotating.
    - Then re-call navigate_to_point to the original target coordinates.
 5. Try at least 2-3 different approach angles before giving up.
+
+## Fine-Tuning Position (use move_relative)
+After navigate_to_point brings you near the target, use move_relative
+for precise centering:
+- move_relative(forward=0.1~0.3) for small forward corrections
+- move_relative(right=±0.1~0.2) for lateral centering
+- move_relative(up=±0.1) for altitude adjustments
+Always call get_current_view after each move to verify alignment.
 """
 
 
