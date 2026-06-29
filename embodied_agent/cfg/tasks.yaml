@@ -1,0 +1,5 @@
+tasks:
+  - id: pos_same_01
+    type: pos
+    difficulty: same_room
+    message: "Fly to the point x=1.5, y=2.0"
